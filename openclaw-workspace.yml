@@ -1,0 +1,13 @@
+# xAI Workspace Apps — Monorepo
+# Each path contains a manifest.yml defining an app, agent, skill, or tool.
+
+apps:
+  - path: apps/email-manager
+  - path: apps/expense-tracker
+  - path: apps/code-reviewer
+  - path: agents/sales-assistant
+  - path: agents/support-bot
+  - path: skills/summarize-text
+  - path: skills/extract-data
+  - path: tools/google-sheets
+  - path: tools/github-issues

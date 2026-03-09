@@ -1,0 +1,33 @@
+slug: extract-data
+kind: skill
+name: Extract Structured Data
+description: Extracts structured data from unstructured text — invoices, receipts, contracts, forms
+icon: "\U0001F4CB"
+version: 1.0.0
+
+input:
+  type: object
+  properties:
+    text:
+      type: string
+      description: Raw text or OCR output to extract from
+    schema:
+      type: object
+      description: JSON Schema describing the expected output structure
+    hints:
+      type: string
+      description: Optional hints about what to look for
+  required: [text]
+
+output:
+  type: object
+  properties:
+    extracted:
+      type: object
+      description: Structured data matching the requested schema
+    confidence:
+      type: number
+      description: Confidence score 0-1
+
+model: claude-sonnet-4-6
+sandbox: strict

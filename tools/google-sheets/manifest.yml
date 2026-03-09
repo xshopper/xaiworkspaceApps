@@ -1,0 +1,36 @@
+slug: google-sheets
+kind: tool
+name: Google Sheets
+description: Read, write, and manage Google Sheets spreadsheets
+icon: "\U0001F4CA"
+version: 1.0.0
+
+authProvider: google
+baseUrl: https://sheets.googleapis.com/v4
+
+operations:
+  - name: read
+    description: Read data from a spreadsheet range
+    method: GET
+    path: /spreadsheets/{spreadsheetId}/values/{range}
+  - name: write
+    description: Write data to a spreadsheet range
+    method: PUT
+    path: /spreadsheets/{spreadsheetId}/values/{range}
+  - name: append
+    description: Append rows to a spreadsheet
+    method: POST
+    path: /spreadsheets/{spreadsheetId}/values/{range}:append
+  - name: create
+    description: Create a new spreadsheet
+    method: POST
+    path: /spreadsheets
+  - name: list-sheets
+    description: List all sheets in a spreadsheet
+    method: GET
+    path: /spreadsheets/{spreadsheetId}
+
+permissions:
+  integrations: [google]
+
+sandbox: strict

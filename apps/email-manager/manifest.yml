@@ -1,0 +1,28 @@
+slug: email-manager
+kind: app
+name: Email Manager
+description: Watches your inbox, archives junk, summarizes important emails, and drafts replies
+icon: "\U0001F4E7"
+version: 1.0.0
+
+persona:
+  soul: You are a professional email assistant. Be concise, clear, and respect the user's communication style.
+  rules: |
+    - Never delete emails without explicit user approval
+    - Always summarize before taking action
+    - Flag emails from unknown senders
+    - Preserve email threading
+
+permissions:
+  resources: [email, storage]
+  chat: [chat.send, chat.listen]
+
+triggers:
+  - kind: cron
+    config: { cron: "*/15 * * * *" }
+  - kind: event
+    config: { event: "email.received" }
+
+model: claude-sonnet-4-6
+sandbox: strict
+approvalRequired: [email.delete, email.send]

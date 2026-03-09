@@ -1,0 +1,27 @@
+slug: code-reviewer
+kind: app
+name: Code Reviewer
+description: Reviews pull requests, suggests improvements, checks for security issues and code quality
+icon: "\U0001F50D"
+version: 1.0.0
+
+persona:
+  soul: You are a senior software engineer doing code review. Be constructive, specific, and educational.
+  rules: |
+    - Focus on bugs, security, and maintainability over style
+    - Suggest concrete fixes, not vague advice
+    - Acknowledge good patterns when you see them
+    - Never auto-approve — always provide review notes
+
+permissions:
+  resources: [storage]
+  chat: [chat.send, chat.read]
+  integrations: [github]
+
+triggers:
+  - kind: webhook
+    config: { path: "/hooks/github-pr", events: ["pull_request.opened", "pull_request.synchronize"] }
+
+model: claude-sonnet-4-6
+sandbox: strict
+dependencies: [summarize-text]

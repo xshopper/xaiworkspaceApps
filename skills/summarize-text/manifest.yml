@@ -1,0 +1,33 @@
+slug: summarize-text
+kind: skill
+name: Summarize Text
+description: Summarizes any text into key points — emails, documents, articles, chat threads
+icon: "\u26A1"
+version: 1.0.0
+
+input:
+  type: object
+  properties:
+    text:
+      type: string
+      description: The text to summarize
+    maxPoints:
+      type: integer
+      description: Maximum number of bullet points
+      default: 5
+    style:
+      type: string
+      enum: [bullets, paragraph, tldr]
+      default: bullets
+  required: [text]
+
+output:
+  type: object
+  properties:
+    summary:
+      type: string
+    pointCount:
+      type: integer
+
+model: claude-haiku-4-5-20251001
+sandbox: strict

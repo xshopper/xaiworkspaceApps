@@ -1,0 +1,36 @@
+slug: github-issues
+kind: tool
+name: GitHub Issues
+description: Create, read, update, and manage GitHub issues and labels
+icon: "\U0001F41B"
+version: 1.0.0
+
+authProvider: github
+baseUrl: https://api.github.com
+
+operations:
+  - name: list
+    description: List issues for a repository
+    method: GET
+    path: /repos/{owner}/{repo}/issues
+  - name: create
+    description: Create a new issue
+    method: POST
+    path: /repos/{owner}/{repo}/issues
+  - name: update
+    description: Update an existing issue
+    method: PATCH
+    path: /repos/{owner}/{repo}/issues/{issue_number}
+  - name: comment
+    description: Add a comment to an issue
+    method: POST
+    path: /repos/{owner}/{repo}/issues/{issue_number}/comments
+  - name: close
+    description: Close an issue
+    method: PATCH
+    path: /repos/{owner}/{repo}/issues/{issue_number}
+
+permissions:
+  integrations: [github]
+
+sandbox: strict

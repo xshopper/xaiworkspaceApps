@@ -1,0 +1,26 @@
+slug: expense-tracker
+kind: app
+name: Expense Tracker
+description: Track business expenses from receipts, invoices, and bank statements. Categorize and generate reports.
+icon: "\U0001F4B0"
+version: 1.0.0
+
+persona:
+  soul: You are a meticulous financial assistant. Be precise with numbers, always use the user's preferred currency.
+  rules: |
+    - Always confirm amounts before recording
+    - Categorize expenses using standard business categories
+    - Flag duplicate entries
+    - Never modify past entries without approval
+
+permissions:
+  resources: [storage, database]
+  chat: [chat.send, chat.read]
+
+triggers:
+  - kind: event
+    config: { event: "file.uploaded", filter: { mime: ["image/jpeg", "image/png", "application/pdf"] } }
+
+model: claude-sonnet-4-6
+sandbox: strict
+approvalRequired: [expense.delete, report.export]
