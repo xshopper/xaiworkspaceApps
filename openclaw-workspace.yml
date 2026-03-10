@@ -11,3 +11,4 @@ apps:
   - path: skills/extract-data
   - path: tools/google-sheets
   - path: tools/github-issues
+  - path: apps/cliproxy
