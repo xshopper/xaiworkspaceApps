@@ -1,4 +1,5 @@
 slug: expense-tracker
+identifier: com.xshopper.expense-tracker
 kind: app
 name: Expense Tracker
 description: Track business expenses from receipts, invoices, and bank statements. Categorize and generate reports.
