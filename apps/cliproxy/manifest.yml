@@ -1,4 +1,5 @@
 slug: cliproxy
+identifier: com.xshopper.cliproxy
 kind: app
 name: CLI Proxy
 description: Connect your API keys and CLI subscriptions (Grok, Claude, Gemini, Codex, Qwen) as usable models
