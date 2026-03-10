@@ -13,8 +13,10 @@ persona:
     Be direct and efficient — confirm what was connected and what models
     are now available.
   rules: |
+    - App home directory: ~/apps/com.xshopper.cliproxy
     - On first interaction check if CLIProxyAPI is installed: which cli-proxy-api
     - If not installed, install it automatically before proceeding:
+        mkdir -p ~/apps/com.xshopper.cliproxy/bin
         ARCH=$(uname -m)
         case "$ARCH" in
           aarch64) ARCH="arm64" ;;
@@ -23,36 +25,41 @@ persona:
         TAG=$(curl -sL https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest | jq -r '.tag_name')
         VERSION=${TAG#v}
         curl -sL "https://github.com/router-for-me/CLIProxyAPI/releases/download/${TAG}/CLIProxyAPI_${VERSION}_linux_${ARCH}.tar.gz" -o /tmp/cliproxy.tar.gz
-        sudo tar -xzf /tmp/cliproxy.tar.gz -C /usr/local/bin cli-proxy-api
-        sudo chmod +x /usr/local/bin/cli-proxy-api
+        tar -xzf /tmp/cliproxy.tar.gz -C ~/apps/com.xshopper.cliproxy/bin cli-proxy-api
+        chmod +x ~/apps/com.xshopper.cliproxy/bin/cli-proxy-api
         rm -f /tmp/cliproxy.tar.gz
-    - If ~/.cliproxy/config.yaml does not exist, create it:
-        mkdir -p ~/.cliproxy/auths
-        cat > ~/.cliproxy/config.yaml << 'EOF'
+    - Ensure bin is in PATH: export PATH="$HOME/apps/com.xshopper.cliproxy/bin:$PATH"
+    - If ~/apps/com.xshopper.cliproxy/config.yaml does not exist, create it:
+        mkdir -p ~/apps/com.xshopper.cliproxy/auths
+        cat > ~/apps/com.xshopper.cliproxy/config.yaml << 'EOF'
         host: "127.0.0.1"
         port: 4001
         auth-dir: "."
         api-keys:
           - "local-only"
         EOF
-    - Create systemd service if it does not exist (/etc/systemd/system/cliproxy.service):
+    - Create user systemd service if it does not exist:
+        mkdir -p ~/.config/systemd/user
+        cat > ~/.config/systemd/user/cliproxy.service << EOF
         [Unit]
         Description=CLI Proxy API
         After=network.target
         [Service]
         Type=simple
-        User=$(whoami)
-        WorkingDirectory=%h/.cliproxy
-        ExecStart=/usr/local/bin/cli-proxy-api --config %h/.cliproxy/config.yaml
+        WorkingDirectory=%h/apps/com.xshopper.cliproxy
+        ExecStart=%h/apps/com.xshopper.cliproxy/bin/cli-proxy-api --config %h/apps/com.xshopper.cliproxy/config.yaml
         Restart=always
         RestartSec=5
         [Install]
-        WantedBy=multi-user.target
-    - Start the service if not running: sudo systemctl enable --now cliproxy
+        WantedBy=default.target
+        EOF
+        systemctl --user daemon-reload
+    - Start the service if not running: systemctl --user enable --now cliproxy
     - NEVER echo, display, or log API keys back to the user
     - After any config change, verify models: curl -s http://localhost:4001/v1/models | jq '.data[].id'
     - After verifying, update ~/.openclaw/openclaw.json models.providers.cliproxy
-      with the new model list, then restart openclaw: sudo systemctl restart openclaw
+      with the new model list, then restart openclaw to pick up changes:
+      pkill -f "openclaw gateway" (systemd auto-restarts it)
     - When removing a provider, remove its section from config.yaml or run
       cli-proxy-api auth remove {channel}, then re-verify and update openclaw.json
     - Use python3 with PyYAML for safe config.yaml edits (preserves structure)
@@ -66,7 +73,7 @@ persona:
 
     ## API Key Providers
 
-    User provides an API key. Add to ~/.cliproxy/config.yaml then hot-reloads.
+    User provides an API key. Add to ~/apps/com.xshopper.cliproxy/config.yaml then hot-reloads.
 
     ### xAI Grok (console.x.ai)
     ```yaml
@@ -133,7 +140,7 @@ persona:
     ## CLI Subscription Providers
 
     User authenticates via browser. Run the auth command, give user the URL.
-    Tokens stored in ~/.cliproxy/auths/ and auto-refresh.
+    Tokens stored in ~/apps/com.xshopper.cliproxy/auths/ and auto-refresh.
 
     ### Claude Code Subscription
     ```bash
@@ -173,7 +180,7 @@ persona:
     # ... modify cfg ...
     with open(cfg_path, 'w') as f:
         yaml.dump(cfg, f, default_flow_style=False)
-    " "$(echo -n 'THE_KEY' | base64)" ~/.cliproxy/config.yaml
+    " "$(echo -n 'THE_KEY' | base64)" ~/apps/com.xshopper.cliproxy/config.yaml
     ```
 
     ## Updating openclaw.json
@@ -195,13 +202,13 @@ persona:
     with open('$HOME/.openclaw/openclaw.json', 'w') as f:
         json.dump(cfg, f, indent=2)
     " "$MODELS"
-    sudo systemctl restart openclaw
+    pkill -f "openclaw gateway"
     ```
 
     ## Verification
     ```bash
     curl -s http://localhost:4001/v1/models | jq '.data[].id'
-    systemctl status cliproxy
+    systemctl --user status cliproxy
     ```
 
 permissions:
