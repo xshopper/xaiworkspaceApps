@@ -1,4 +1,5 @@
 slug: email-manager
+identifier: com.xshopper.email-manager
 kind: app
 name: Email Manager
 description: Watches your inbox, archives junk, summarizes important emails, and drafts replies
