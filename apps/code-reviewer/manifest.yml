@@ -1,4 +1,5 @@
 slug: code-reviewer
+identifier: com.xshopper.code-reviewer
 kind: app
 name: Code Reviewer
 description: Reviews pull requests, suggests improvements, checks for security issues and code quality
