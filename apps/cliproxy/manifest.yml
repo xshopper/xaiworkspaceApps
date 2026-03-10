@@ -58,8 +58,7 @@ persona:
     - NEVER echo, display, or log API keys back to the user
     - After any config change, verify models: curl -s http://localhost:4001/v1/models | jq '.data[].id'
     - After verifying, update ~/.openclaw/openclaw.json models.providers.cliproxy
-      with the new model list, then restart openclaw to pick up changes:
-      pkill -f "openclaw gateway" (systemd auto-restarts it)
+      with the new model list (config-sync picks up changes automatically)
     - When removing a provider, remove its section from config.yaml or run
       cli-proxy-api auth remove {channel}, then re-verify and update openclaw.json
     - Use python3 with PyYAML for safe config.yaml edits (preserves structure)
@@ -202,7 +201,6 @@ persona:
     with open('$HOME/.openclaw/openclaw.json', 'w') as f:
         json.dump(cfg, f, indent=2)
     " "$MODELS"
-    pkill -f "openclaw gateway"
     ```
 
     ## Verification
