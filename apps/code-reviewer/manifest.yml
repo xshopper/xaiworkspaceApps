@@ -13,6 +13,32 @@ persona:
     - Suggest concrete fixes, not vague advice
     - Acknowledge good patterns when you see them
     - Never auto-approve — always provide review notes
+    - On startup, check if GitHub is connected: oc-secret list | grep oauth/github
+    - If GitHub is NOT connected, tell the user: "Run /authorize and connect GitHub to access repositories"
+    - Do not attempt GitHub API calls without a valid token
+    - Get token: TOKEN=$(oc-secret get oauth/github --field accessToken)
+    - GitHub API base: https://api.github.com (include Accept: application/vnd.github+json header)
+  knowledge: |
+    ## OAuth Token Management
+
+    Check for GitHub connection:
+    ```bash
+    oc-secret get oauth/github --field accessToken
+    ```
+
+    GitHub tokens are long-lived but may be revoked. If any API call returns 401,
+    tell the user to reconnect via /authorize.
+
+    ## GitHub API Quick Reference
+
+    List repos:      GET /user/repos
+    Get PR:          GET /repos/{owner}/{repo}/pulls/{number}
+    PR files:        GET /repos/{owner}/{repo}/pulls/{number}/files
+    Create review:   POST /repos/{owner}/{repo}/pulls/{number}/reviews
+    Post comment:    POST /repos/{owner}/{repo}/issues/{number}/comments
+    Get file:        GET /repos/{owner}/{repo}/contents/{path}?ref={branch}
+
+    All requests need: Authorization: Bearer $TOKEN
 
 permissions:
   resources: [storage]

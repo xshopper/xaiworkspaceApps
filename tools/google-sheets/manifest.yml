@@ -9,6 +9,10 @@ authProvider: google
 baseUrl: https://sheets.googleapis.com/v4
 
 operations:
+  - name: list-spreadsheets
+    description: List all Google Sheets spreadsheets in the user's Drive
+    method: GET
+    path: https://www.googleapis.com/drive/v3/files?q=mimeType='application/vnd.google-apps.spreadsheet'&fields=files(id,name,modifiedTime)
   - name: read
     description: Read data from a spreadsheet range
     method: GET
@@ -25,10 +29,18 @@ operations:
     description: Create a new spreadsheet
     method: POST
     path: /spreadsheets
-  - name: list-sheets
-    description: List all sheets in a spreadsheet
+  - name: get-spreadsheet
+    description: Get spreadsheet metadata including all sheet tabs
     method: GET
     path: /spreadsheets/{spreadsheetId}
+  - name: clear
+    description: Clear values from a spreadsheet range
+    method: POST
+    path: /spreadsheets/{spreadsheetId}/values/{range}:clear
+  - name: batch-get
+    description: Read multiple ranges from a spreadsheet in one request
+    method: GET
+    path: /spreadsheets/{spreadsheetId}/values:batchGet
 
 permissions:
   integrations: [google]

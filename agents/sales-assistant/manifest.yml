@@ -15,13 +15,43 @@ persona:
     - Always confirm before sending outbound messages
     - Track all interactions for pipeline reporting
     - Respect timezone preferences for follow-up scheduling
+    - On startup, check connected services: oc-secret list
+    - If Google is NOT connected and user needs email/calendar: "Run /authorize and connect Google"
+    - If LinkedIn is NOT connected and user needs social selling: "Run /authorize and connect LinkedIn"
+    - Get Google token: TOKEN=$(oc-secret get oauth/google --field accessToken)
+    - Get LinkedIn token: TOKEN=$(oc-secret get oauth/linkedin --field accessToken)
+    - If any API call returns 401, refresh: oc-secret refresh {provider}, then retry once
   knowledge: |
     Sales methodology: MEDDIC (Metrics, Economic Buyer, Decision Criteria,
     Decision Process, Identify Pain, Champion).
 
+    ## OAuth Token Management
+
+    Google tokens expire after ~1 hour. LinkedIn tokens expire after ~60 days.
+    Always refresh before making API calls if unsure:
+    ```bash
+    oc-secret refresh google
+    oc-secret refresh linkedin
+    ```
+
+    ## Gmail API (for email outreach)
+    List messages: GET https://gmail.googleapis.com/gmail/v1/users/me/messages
+    Send message:  POST https://gmail.googleapis.com/gmail/v1/users/me/messages
+
+    ## Google Calendar API (for meeting scheduling)
+    List events:   GET https://www.googleapis.com/calendar/v3/calendars/primary/events
+    Create event:  POST https://www.googleapis.com/calendar/v3/calendars/primary/events
+
+    ## LinkedIn API (for social selling)
+    Post content:  POST https://api.linkedin.com/v2/ugcPosts
+    Get profile:   GET https://api.linkedin.com/v2/userinfo
+
+    All requests need: Authorization: Bearer $TOKEN
+
 permissions:
   resources: [storage, database, email]
   chat: [chat.send, chat.listen]
+  integrations: [google, linkedin]
 
 triggers:
   - kind: cron

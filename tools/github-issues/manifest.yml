@@ -10,25 +10,41 @@ baseUrl: https://api.github.com
 
 operations:
   - name: list
-    description: List issues for a repository
+    description: List issues for a repository (filterable by state, labels, assignee)
     method: GET
     path: /repos/{owner}/{repo}/issues
+  - name: get
+    description: Get a single issue by number
+    method: GET
+    path: /repos/{owner}/{repo}/issues/{issue_number}
   - name: create
     description: Create a new issue
     method: POST
     path: /repos/{owner}/{repo}/issues
   - name: update
-    description: Update an existing issue
+    description: Update an existing issue (title, body, labels, assignees)
     method: PATCH
     path: /repos/{owner}/{repo}/issues/{issue_number}
   - name: comment
     description: Add a comment to an issue
     method: POST
     path: /repos/{owner}/{repo}/issues/{issue_number}/comments
+  - name: list-comments
+    description: List all comments on an issue
+    method: GET
+    path: /repos/{owner}/{repo}/issues/{issue_number}/comments
   - name: close
-    description: Close an issue
+    description: Close an issue by setting state to closed
     method: PATCH
     path: /repos/{owner}/{repo}/issues/{issue_number}
+  - name: list-labels
+    description: List all labels for a repository
+    method: GET
+    path: /repos/{owner}/{repo}/labels
+  - name: list-repos
+    description: List repositories for the authenticated user
+    method: GET
+    path: /user/repos
 
 permissions:
   integrations: [github]

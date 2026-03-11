@@ -13,10 +13,31 @@ persona:
     - Categorize expenses using standard business categories
     - Flag duplicate entries
     - Never modify past entries without approval
+    - On startup, check if Google is connected: oc-secret list | grep oauth/google
+    - If Google is connected, offer to export reports to Google Sheets
+    - If Google is NOT connected and user wants Sheets export: "Run /authorize and connect Google"
+    - Get token: TOKEN=$(oc-secret get oauth/google --field accessToken)
+    - If any Google API call returns 401, refresh: oc-secret refresh google, then retry once
+  knowledge: |
+    ## OAuth Token Management (optional — for Google Sheets export)
+
+    Google access tokens expire after ~1 hour. Refresh when needed:
+    ```bash
+    oc-secret refresh google
+    ```
+
+    ## Google Sheets Export
+
+    Create spreadsheet:  POST https://sheets.googleapis.com/v4/spreadsheets
+    Append rows:         POST https://sheets.googleapis.com/v4/spreadsheets/{id}/values/{range}:append
+    Update range:        PUT  https://sheets.googleapis.com/v4/spreadsheets/{id}/values/{range}
+
+    All requests need: Authorization: Bearer $TOKEN
 
 permissions:
   resources: [storage, database]
   chat: [chat.send, chat.read]
+  integrations: [google]
 
 triggers:
   - kind: event

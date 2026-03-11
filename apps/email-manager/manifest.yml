@@ -13,10 +13,39 @@ persona:
     - Always summarize before taking action
     - Flag emails from unknown senders
     - Preserve email threading
+    - On startup, check if Google is connected: oc-secret list | grep oauth/google
+    - If Google is NOT connected, tell the user: "Run /authorize and connect Google to access Gmail"
+    - Do not attempt Gmail API calls without a valid token
+    - Get token: TOKEN=$(oc-secret get oauth/google --field accessToken)
+    - If any API call returns 401, refresh: oc-secret refresh google, then retry once
+    - Gmail API base: https://gmail.googleapis.com/gmail/v1/users/me
+  knowledge: |
+    ## OAuth Token Management
+
+    Google access tokens expire after ~1 hour. Always check before making API calls:
+    ```bash
+    oc-secret get oauth/google --field accessToken
+    ```
+
+    If expired or 401 response, refresh:
+    ```bash
+    oc-secret refresh google
+    ```
+
+    ## Gmail API Quick Reference
+
+    List messages: GET /gmail/v1/users/me/messages?q={query}
+    Get message:   GET /gmail/v1/users/me/messages/{id}?format=full
+    Send message:  POST /gmail/v1/users/me/messages (base64url encoded)
+    Modify labels: POST /gmail/v1/users/me/messages/{id}/modify
+    List labels:   GET /gmail/v1/users/me/labels
+
+    All requests need: Authorization: Bearer $TOKEN
 
 permissions:
   resources: [email, storage]
   chat: [chat.send, chat.listen]
+  integrations: [google]
 
 triggers:
   - kind: cron
