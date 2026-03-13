@@ -214,4 +214,5 @@ permissions:
   chat: [chat.send, chat.read, chat.listen]
 
 model: claude-sonnet-4-6
+modelFallback: [claude-haiku-4-5-20251001]
 sandbox: relaxed

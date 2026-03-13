@@ -50,5 +50,6 @@ triggers:
     config: { path: "/hooks/github-pr", events: ["pull_request.opened", "pull_request.synchronize"] }
 
 model: claude-sonnet-4-6
+modelFallback: [claude-opus-4-6]
 sandbox: strict
 dependencies: [summarize-text]

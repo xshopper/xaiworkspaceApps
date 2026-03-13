@@ -54,5 +54,6 @@ triggers:
     config: { event: "email.received" }
 
 model: claude-sonnet-4-6
+modelFallback: [claude-haiku-4-5-20251001]
 sandbox: strict
 approvalRequired: [email.delete, email.send]

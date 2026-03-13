@@ -1,0 +1,27 @@
+{
+  "name": "xaiworkspaceapps",
+  "version": "1.0.0",
+  "description": "Official app repository for [xAI Workspace](https://xaiworkspace.com). Contains apps, agents, skills, and tools that can be installed directly from the platform.",
+  "main": "index.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xshopper/xaiworkspaceApps.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/xshopper/xaiworkspaceApps/issues"
+  },
+  "homepage": "https://github.com/xshopper/xaiworkspaceApps#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.58.2"
+  }
+}

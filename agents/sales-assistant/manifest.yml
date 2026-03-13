@@ -1,4 +1,5 @@
 slug: sales-assistant
+identifier: com.xshopper.sales-assistant
 kind: agent
 name: Sales Assistant
 description: Helps manage leads, draft proposals, follow up with prospects, and track pipeline

@@ -1,4 +1,5 @@
 slug: github-issues
+identifier: com.xshopper.github-issues
 kind: tool
 name: GitHub Issues
 description: Create, read, update, and manage GitHub issues and labels

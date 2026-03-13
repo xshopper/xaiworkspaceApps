@@ -1,4 +1,5 @@
 slug: extract-data
+identifier: com.xshopper.extract-data
 kind: skill
 name: Extract Structured Data
 description: Extracts structured data from unstructured text — invoices, receipts, contracts, forms
@@ -30,4 +31,5 @@ output:
       description: Confidence score 0-1
 
 model: claude-sonnet-4-6
+modelFallback: [claude-haiku-4-5-20251001]
 sandbox: strict

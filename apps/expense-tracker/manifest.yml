@@ -44,5 +44,6 @@ triggers:
     config: { event: "file.uploaded", filter: { mime: ["image/jpeg", "image/png", "application/pdf"] } }
 
 model: claude-sonnet-4-6
+modelFallback: [claude-haiku-4-5-20251001]
 sandbox: strict
 approvalRequired: [expense.delete, report.export]

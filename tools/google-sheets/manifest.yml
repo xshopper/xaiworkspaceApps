@@ -1,4 +1,5 @@
 slug: google-sheets
+identifier: com.xshopper.google-sheets
 kind: tool
 name: Google Sheets
 description: Read, write, and manage Google Sheets spreadsheets

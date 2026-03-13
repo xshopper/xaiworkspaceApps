@@ -1,4 +1,5 @@
 slug: summarize-text
+identifier: com.xshopper.summarize-text
 kind: skill
 name: Summarize Text
 description: Summarizes any text into key points — emails, documents, articles, chat threads
@@ -30,4 +31,5 @@ output:
       type: integer
 
 model: claude-haiku-4-5-20251001
+modelFallback: [claude-sonnet-4-6]
 sandbox: strict

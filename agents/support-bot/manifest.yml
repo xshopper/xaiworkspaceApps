@@ -1,4 +1,5 @@
 slug: support-bot
+identifier: com.xshopper.support-bot
 kind: agent
 name: Support Bot
 description: Handles customer support tickets — triages, responds to common questions, escalates complex issues
