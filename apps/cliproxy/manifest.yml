@@ -14,7 +14,8 @@ persona:
     are now available.
   rules: |
     - App home directory: ~/apps/com.xshopper.cliproxy
-    - IMPORTANT: No root access. No systemd. All files stay in ~/apps/com.xshopper.cliproxy/
+    - IMPORTANT: No root access. All files stay in ~/apps/com.xshopper.cliproxy/
+    - User-level systemd IS available (linger enabled by cloud-init)
     - On first interaction check if CLIProxyAPI is installed:
         test -x ~/apps/com.xshopper.cliproxy/bin/cli-proxy-api && echo INSTALLED || echo NOT_INSTALLED
     - If not installed, install it automatically before proceeding:
@@ -39,22 +40,35 @@ persona:
         api-keys:
           - "local-only"
         EOF
-    - To start CLIProxyAPI (no root/systemd — runs as background process):
-        Check if already running: pgrep -f cli-proxy-api && echo RUNNING || echo STOPPED
-        Start: cd ~/apps/com.xshopper.cliproxy && nohup ./bin/cli-proxy-api --config config.yaml > cliproxy.log 2>&1 &
-        Wait 2 seconds then verify: sleep 2 && curl -s http://localhost:4001/v1/models
-    - To stop: pkill -f cli-proxy-api
-    - To restart: pkill -f cli-proxy-api; sleep 1; cd ~/apps/com.xshopper.cliproxy && nohup ./bin/cli-proxy-api --config config.yaml > cliproxy.log 2>&1 &
-    - Check logs: tail -20 ~/apps/com.xshopper.cliproxy/cliproxy.log
+    - If ~/.config/systemd/user/cliproxy.service does not exist, create it:
+        mkdir -p ~/.config/systemd/user
+        cat > ~/.config/systemd/user/cliproxy.service << 'SVCEOF'
+        [Unit]
+        Description=CLI Proxy API
+        After=network.target
+        [Service]
+        Type=simple
+        WorkingDirectory=%h/apps/com.xshopper.cliproxy
+        ExecStart=%h/apps/com.xshopper.cliproxy/bin/cli-proxy-api --config %h/apps/com.xshopper.cliproxy/config.yaml
+        Restart=always
+        RestartSec=5
+        [Install]
+        WantedBy=default.target
+        SVCEOF
+        systemctl --user daemon-reload
+    - To start: systemctl --user enable --now cliproxy
+    - To stop: systemctl --user stop cliproxy
+    - To restart after config change: systemctl --user restart cliproxy
+    - Check status: systemctl --user status cliproxy
+    - Check logs: journalctl --user -u cliproxy --no-pager -n 20
     - NEVER echo, display, or log API keys back to the user
     - After any config change, restart CLIProxyAPI and verify models:
-        pkill -f cli-proxy-api; sleep 1
-        cd ~/apps/com.xshopper.cliproxy && nohup ./bin/cli-proxy-api --config config.yaml > cliproxy.log 2>&1 &
+        systemctl --user restart cliproxy
         sleep 2 && curl -s http://localhost:4001/v1/models | jq '.data[].id'
     - After verifying, update ~/.openclaw/openclaw.json models.providers.cliproxy
       with the new model list (config-sync picks up changes automatically)
     - When removing a provider, remove its section from config.yaml or run
-      cli-proxy-api auth remove {channel}, then restart and update openclaw.json
+      cli-proxy-api auth remove {channel}, then systemctl --user restart cliproxy and update openclaw.json
     - Use python3 with PyYAML for safe config.yaml edits (preserves structure)
   knowledge: |
     ## Getting Started
@@ -222,13 +236,15 @@ persona:
 
     ## Verification
     ```bash
-    curl -s http://localhost:4001/v1/models | jq '.data[].id'
     systemctl --user status cliproxy
+    curl -s http://localhost:4001/v1/models | jq '.data[].id'
     ```
 
 permissions:
   resources: [storage]
   chat: [chat.send, chat.read, chat.listen]
+
+startup: "test -x bin/cli-proxy-api && test -f config.yaml && nohup bin/cli-proxy-api --config config.yaml > cliproxy.log 2>&1 &"
 
 model: claude-sonnet-4-6
 modelFallback: [claude-haiku-4-5-20251001]
