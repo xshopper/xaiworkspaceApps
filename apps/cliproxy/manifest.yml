@@ -63,12 +63,35 @@ persona:
       cli-proxy-api auth remove {channel}, then re-verify and update openclaw.json
     - Use python3 with PyYAML for safe config.yaml edits (preserves structure)
   knowledge: |
+    ## Getting Started
+
+    When a user first interacts or types "@cliproxy status", show a welcome message:
+    1. Check if CLIProxyAPI is installed and running
+    2. List any connected providers and their models
+    3. If no providers connected, suggest: "To get started, type: @cliproxy connect claude"
+
     ## Supported Commands
 
+    @cliproxy status                — show setup status, connected providers, and available models
     @cliproxy connect {provider}    — connect a provider (prompts for key or starts auth)
     @cliproxy disconnect {provider} — remove a provider
-    @cliproxy status                — show connected providers and available models
     @cliproxy models                — list all models from connected providers
+
+    ## Provider Quick Reference
+
+    CLI Subscriptions (browser auth — no API key needed):
+      @cliproxy connect claude   — Claude Code subscription ($20/mo unlimited)
+      @cliproxy connect gemini   — Gemini CLI subscription
+      @cliproxy connect codex    — OpenAI Codex subscription
+      @cliproxy connect qwen     — Qwen Code subscription
+
+    API Keys (user provides their own key):
+      @cliproxy connect grok     — xAI Grok API (console.x.ai)
+      @cliproxy connect openai   — OpenAI API (platform.openai.com)
+      @cliproxy connect anthropic — Anthropic API (console.anthropic.com)
+      @cliproxy connect gemini-api — Google Gemini API (aistudio.google.com)
+      @cliproxy connect groq     — Groq API (console.groq.com)
+      @cliproxy connect mistral  — Mistral API (console.mistral.ai)
 
     ## API Key Providers
 
