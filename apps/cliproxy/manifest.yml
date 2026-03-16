@@ -246,6 +246,7 @@ permissions:
 
 configurable: true
 startup: "test -x bin/cli-proxy-api && test -f config.yaml && nohup bin/cli-proxy-api --config config.yaml > cliproxy.log 2>&1 &"
+cleanup: "python3 -c \"import json,os; p=os.path.expanduser('~/.openclaw/openclaw.json'); cfg=json.load(open(p)); cfg.get('models',{}).get('providers',{}).pop('cliproxy',None); json.dump(cfg,open(p,'w'),indent=2)\" 2>/dev/null || true"
 
 model: claude-sonnet-4-6
 modelFallback: [claude-haiku-4-5-20251001]
