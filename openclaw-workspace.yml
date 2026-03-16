@@ -12,3 +12,4 @@ apps:
   - path: tools/google-sheets
   - path: tools/github-issues
   - path: apps/cliproxy
+  - path: apps/wello-world
