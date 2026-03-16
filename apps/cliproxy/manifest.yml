@@ -244,6 +244,7 @@ permissions:
   resources: [storage]
   chat: [chat.send, chat.read, chat.listen]
 
+configurable: true
 startup: "test -x bin/cli-proxy-api && test -f config.yaml && nohup bin/cli-proxy-api --config config.yaml > cliproxy.log 2>&1 &"
 
 model: claude-sonnet-4-6
