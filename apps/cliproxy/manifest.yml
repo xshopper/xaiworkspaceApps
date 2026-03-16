@@ -244,6 +244,24 @@ permissions:
   resources: [storage]
   chat: [chat.send, chat.read, chat.listen]
 
+help: |
+  Connect your AI provider API keys and CLI subscriptions so they become
+  available as models in your workspace.
+
+  **Commands:**
+    `@cliproxy status`              — show setup status and connected providers
+    `@cliproxy connect claude`      — connect Claude Code subscription (browser auth)
+    `@cliproxy connect gemini`      — connect Gemini CLI subscription
+    `@cliproxy connect codex`       — connect OpenAI Codex subscription
+    `@cliproxy connect grok`        — connect xAI Grok API key
+    `@cliproxy connect openai`      — connect OpenAI API key
+    `@cliproxy connect groq`        — connect Groq API key
+    `@cliproxy connect mistral`     — connect Mistral API key
+    `@cliproxy disconnect <name>`   — remove a provider
+    `@cliproxy models`              — list all available models
+
+  CLI subscriptions use browser OAuth (no API key needed).
+  API key providers prompt you to paste your key.
 configurable: true
 startup: "test -x bin/cli-proxy-api && test -f config.yaml && nohup bin/cli-proxy-api --config config.yaml > cliproxy.log 2>&1 &"
 cleanup: "python3 -c \"import json,os; p=os.path.expanduser('~/.openclaw/openclaw.json'); cfg=json.load(open(p)); cfg.get('models',{}).get('providers',{}).pop('cliproxy',None); json.dump(cfg,open(p,'w'),indent=2)\" 2>/dev/null || true"
