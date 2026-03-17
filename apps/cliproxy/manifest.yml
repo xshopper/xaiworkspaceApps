@@ -67,6 +67,12 @@ persona:
         sleep 2 && curl -s http://localhost:4001/v1/models | jq '.data[].id'
     - After verifying, update ~/.openclaw/openclaw.json models.providers.cliproxy
       with the new model list (config-sync picks up changes automatically)
+    - After updating openclaw.json, also register models with the platform:
+        MODELS=$(curl -s http://localhost:4001/v1/models | jq '[.data[] | {name: .id, provider: "cliproxy"}]')
+        curl -s -X POST "${ANTHROPIC_BASE_URL%/v1}/api/models/register" \
+          -H "Authorization: Bearer $ANTHROPIC_API_KEY" \
+          -H "Content-Type: application/json" \
+          -d "{\"models\": $MODELS, \"port\": 4001, \"registeredBy\": \"cliproxy\"}"
     - When removing a provider, remove its section from config.yaml or run
       cli-proxy-api auth remove {channel}, then systemctl --user restart cliproxy and update openclaw.json
     - Use python3 with PyYAML for safe config.yaml edits (preserves structure)
