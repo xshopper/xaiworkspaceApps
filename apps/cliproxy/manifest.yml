@@ -100,6 +100,7 @@ persona:
       @cliproxy connect qwen     — Qwen Code subscription
 
     API Keys (user provides their own key):
+      @cliproxy connect zai      — Z.ai / Zhipu AI GLM (z.ai)
       @cliproxy connect grok     — xAI Grok API (console.x.ai)
       @cliproxy connect openai   — OpenAI API (platform.openai.com)
       @cliproxy connect anthropic — Anthropic API (console.anthropic.com)
@@ -110,6 +111,22 @@ persona:
     ## API Key Providers
 
     User provides an API key. Add to ~/apps/com.xshopper.cliproxy/config.yaml then hot-reloads.
+
+    ### Z.ai / Zhipu AI (z.ai)
+    ```yaml
+    openai-compatibility:
+      - name: "zai"
+        base-url: "https://api.z.ai/api/paas/v4/"
+        api-key-entries:
+          - api-key: "KEY"
+        models:
+          - name: "glm-5"
+            alias: "glm-5"
+          - name: "glm-4.6"
+            alias: "glm-4.6"
+          - name: "glm-4.5"
+            alias: "glm-4.5"
+    ```
 
     ### xAI Grok (console.x.ai)
     ```yaml
