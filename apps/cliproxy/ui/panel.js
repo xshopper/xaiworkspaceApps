@@ -269,6 +269,7 @@
           handleOAuthConnect(selectedProviderId, def.label).catch((err) => {
             oauthConnecting = false;
             state.error = err?.message ?? "OAuth failed to start";
+            state.success = null;
             render();
           });
         }
