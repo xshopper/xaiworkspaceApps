@@ -54,6 +54,11 @@ let connecting = false; // API key connect in progress
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** Look up human-readable label for a provider name (owned_by / id) */
+function providerLabel(name: string): string {
+  return PROVIDERS.find(p => p.id === name)?.label ?? name;
+}
+
 function formatDate(iso: string | null): string {
   if (!iso) return '—';
   try {
@@ -141,7 +146,7 @@ async function handleUpdateToken() {
 }
 
 function handleDisconnect(providerName: string) {
-  const label = PROVIDERS.find(p => p.id === providerName)?.label ?? providerName;
+  const label = providerLabel(providerName);
   if (!confirm(`Disconnect ${label}?`)) return;
   disconnectProvider(providerName);
   showSuccess(`Disconnect request sent for ${label}. Refreshing...`);
@@ -304,7 +309,7 @@ function handleCancelOAuth() {
 
 function render() {
   const tokenCardTitle = tokenCardProvider
-    ? tokenCardProvider.charAt(0).toUpperCase() + tokenCardProvider.slice(1) + ' OAuth Token'
+    ? providerLabel(tokenCardProvider) + ' OAuth Token'
     : 'OAuth Token';
   const html = `
     <style>${CSS}</style>
@@ -428,7 +433,7 @@ function render() {
         ${state.providers.length > 0 ? state.providers.map(p => `
           <div class="provider-card">
             <div class="provider-header">
-              <span class="provider-name">${escapeHtml(p.name)}</span>
+              <span class="provider-name">${escapeHtml(providerLabel(p.name))}</span>
               <span class="provider-type badge ${p.type === 'cli-subscription' ? 'badge-cli' : 'badge-api'}">${p.type === 'cli-subscription' ? 'CLI' : 'API'}</span>
               <button class="btn btn-danger btn-sm" data-disconnect="${escapeHtml(p.name)}">Disconnect</button>
             </div>

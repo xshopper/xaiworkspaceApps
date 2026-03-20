@@ -159,6 +159,9 @@
       var tokenInputDraft = "";
       var manualTokenOpen = false;
       var connecting = false;
+      function providerLabel(name) {
+        return PROVIDERS.find((p) => p.id === name)?.label ?? name;
+      }
       function formatDate(iso) {
         if (!iso) return "\u2014";
         try {
@@ -230,7 +233,7 @@
         }
       }
       function handleDisconnect(providerName) {
-        const label = PROVIDERS.find((p) => p.id === providerName)?.label ?? providerName;
+        const label = providerLabel(providerName);
         if (!confirm(`Disconnect ${label}?`)) return;
         disconnectProvider(providerName);
         showSuccess(`Disconnect request sent for ${label}. Refreshing...`);
@@ -368,7 +371,7 @@
         showSuccess("Authentication cancelled.");
       }
       function render() {
-        const tokenCardTitle = tokenCardProvider ? tokenCardProvider.charAt(0).toUpperCase() + tokenCardProvider.slice(1) + " OAuth Token" : "OAuth Token";
+        const tokenCardTitle = tokenCardProvider ? providerLabel(tokenCardProvider) + " OAuth Token" : "OAuth Token";
         const html = `
     <style>${CSS}</style>
     <div class="panel">
@@ -491,7 +494,7 @@
         ${state.providers.length > 0 ? state.providers.map((p) => `
           <div class="provider-card">
             <div class="provider-header">
-              <span class="provider-name">${escapeHtml(p.name)}</span>
+              <span class="provider-name">${escapeHtml(providerLabel(p.name))}</span>
               <span class="provider-type badge ${p.type === "cli-subscription" ? "badge-cli" : "badge-api"}">${p.type === "cli-subscription" ? "CLI" : "API"}</span>
               <button class="btn btn-danger btn-sm" data-disconnect="${escapeHtml(p.name)}">Disconnect</button>
             </div>
