@@ -352,7 +352,8 @@
         return str.replace(/'/g, "\\'").replace(/"/g, '\\"');
       }
       var CSS = `
-  * { box-sizing: border-box; margin: 0; padding: 0; }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { -webkit-text-size-adjust: 100%; }
 
   body {
     font-family: var(--font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
@@ -362,7 +363,7 @@
     line-height: 1.5;
   }
 
-  .panel { padding: 16px; max-width: 480px; }
+  .panel { padding: 16px; max-width: 480px; width: 100%; }
 
   .panel-header {
     display: flex;
@@ -500,6 +501,7 @@
   .form-input {
     flex: 1;
     padding: 7px 10px;
+    min-height: 36px;
     background: var(--surface-base, #0a0a0a);
     border: 1px solid var(--border-l2, #333);
     border-radius: var(--radius-sm, 6px);
@@ -507,6 +509,8 @@
     font-size: 12px;
     outline: none;
     transition: border-color 0.15s;
+    -webkit-appearance: none;
+    appearance: none;
   }
 
   .form-input:focus { border-color: var(--fg-link, #3b82f6); }
@@ -516,6 +520,7 @@
 
   .btn {
     padding: 6px 14px;
+    min-height: 36px;
     border: 1px solid transparent;
     border-radius: var(--radius-sm, 6px);
     font-size: 12px;
@@ -523,6 +528,9 @@
     cursor: pointer;
     white-space: nowrap;
     transition: background 0.15s, opacity 0.15s;
+    -webkit-appearance: none;
+    appearance: none;
+    touch-action: manipulation;
   }
 
   .btn:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -568,10 +576,26 @@
     font-size: 11px;
   }
 
-  @media (max-width: 400px) {
+  @media (max-width: 600px) {
+    .panel { padding: 12px; }
+    .panel-title { font-size: 16px; }
     .config-grid { grid-template-columns: 1fr; }
-    .form-row { flex-direction: column; }
+    .config-row { padding: 6px 0; }
+    .form-row { flex-direction: column; align-items: stretch; }
     .form-row .btn { width: 100%; }
+    .form-input { font-size: 16px; padding: 10px 12px; }
+    select.form-input { font-size: 16px; padding: 10px 12px; }
+    .btn { padding: 10px 14px; font-size: 14px; }
+    .provider-header { flex-wrap: wrap; }
+    .model-list { margin-top: 4px; }
+    .card { padding: 12px; }
+  }
+
+  @media (max-width: 360px) {
+    .panel { padding: 8px; }
+    .card { padding: 10px; }
+    .provider-header { gap: 6px; }
+    .model-tag { font-size: 10px; padding: 2px 4px; }
   }
 `;
       xai.on("ready", () => {
