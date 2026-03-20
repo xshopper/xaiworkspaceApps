@@ -230,9 +230,10 @@
         }
       }
       function handleDisconnect(providerName) {
-        if (!confirm(`Disconnect ${providerName}?`)) return;
+        const label = PROVIDERS.find((p) => p.id === providerName)?.label ?? providerName;
+        if (!confirm(`Disconnect ${label}?`)) return;
         disconnectProvider(providerName);
-        showSuccess(`Disconnecting ${providerName}... Check chat for status.`);
+        showSuccess(`Disconnect request sent for ${label}. Refreshing...`);
         setTimeout(loadData, 4e3);
       }
       function handleConnect() {
@@ -250,12 +251,16 @@
           connecting = true;
           render();
           connectProvider(selectedProviderId, key);
-          selectedProviderId = "";
-          apiKeyDraft = "";
-          showSuccess(`API key submitted \u2014 see chat for result.`);
-          setTimeout(() => {
+          showSuccess(`Submitting API key... Refreshing in a few seconds.`);
+          const submittedProvider = selectedProviderId;
+          setTimeout(async () => {
             connecting = false;
-            loadData();
+            await loadData();
+            if (state.providers.some((p) => p.name === submittedProvider)) {
+              selectedProviderId = "";
+              apiKeyDraft = "";
+            }
+            render();
           }, 4e3);
         } else {
           handleOAuthConnect(selectedProviderId, def.label).catch((err) => {
@@ -520,7 +525,7 @@
               <input type="password" id="api-key-input" class="form-input mono" placeholder="Paste your API key..." value="${escapeHtml(apiKeyDraft)}" oninput="__onKeyInput()" />
             </div>` : ""}
             <div class="form-row">
-              <button class="btn btn-primary" onclick="__connect()" ${connectDisabled ? "disabled" : ""}>Connect</button>
+              <button class="btn btn-primary" onclick="__connect()" ${connectDisabled ? "disabled" : ""}>${connecting ? "Connecting..." : selDef ? "Connect " + escapeHtml(selDef.label) : "Connect"}</button>
             </div>`;
         })()}
       </div>
@@ -625,6 +630,7 @@
     font-size: 12px;
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .mono {
@@ -812,7 +818,11 @@
         render();
         loadData();
         if (pollTimer) clearInterval(pollTimer);
-        pollTimer = setInterval(loadData, 3e4);
+        pollTimer = setInterval(() => {
+          const tag = document.activeElement?.tagName;
+          if (tag === "INPUT" || tag === "SELECT") return;
+          loadData();
+        }, 3e4);
         if (!window.__cliproxyClickRegistered) {
           window.__cliproxyClickRegistered = true;
           document.addEventListener("click", (e) => {

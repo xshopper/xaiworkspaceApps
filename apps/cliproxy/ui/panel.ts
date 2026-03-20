@@ -141,9 +141,10 @@ async function handleUpdateToken() {
 }
 
 function handleDisconnect(providerName: string) {
-  if (!confirm(`Disconnect ${providerName}?`)) return;
+  const label = PROVIDERS.find(p => p.id === providerName)?.label ?? providerName;
+  if (!confirm(`Disconnect ${label}?`)) return;
   disconnectProvider(providerName);
-  showSuccess(`Disconnecting ${providerName}... Check chat for status.`);
+  showSuccess(`Disconnect request sent for ${label}. Refreshing...`);
   setTimeout(loadData, 4000);
 }
 
@@ -159,11 +160,19 @@ function handleConnect() {
     connecting = true;
     render();
     connectProvider(selectedProviderId, key);
-    // Reset form after submit
-    selectedProviderId = '';
-    apiKeyDraft = '';
-    showSuccess(`API key submitted — see chat for result.`);
-    setTimeout(() => { connecting = false; loadData(); }, 4000);
+    showSuccess(`Submitting API key... Refreshing in a few seconds.`);
+    // Defer form reset until after loadData confirms the state
+    const submittedProvider = selectedProviderId;
+    setTimeout(async () => {
+      connecting = false;
+      await loadData();
+      // Reset form only if the provider now appears in the connected list
+      if (state.providers.some(p => p.name === submittedProvider)) {
+        selectedProviderId = '';
+        apiKeyDraft = '';
+      }
+      render();
+    }, 4000);
   } else {
     // CLI subscription — start OAuth via CLIProxyAPI or chat
     handleOAuthConnect(selectedProviderId, def.label).catch(err => {
@@ -453,7 +462,7 @@ function render() {
               <input type="password" id="api-key-input" class="form-input mono" placeholder="Paste your API key..." value="${escapeHtml(apiKeyDraft)}" oninput="__onKeyInput()" />
             </div>` : ''}
             <div class="form-row">
-              <button class="btn btn-primary" onclick="__connect()" ${connectDisabled ? 'disabled' : ''}>Connect</button>
+              <button class="btn btn-primary" onclick="__connect()" ${connectDisabled ? 'disabled' : ''}>${connecting ? 'Connecting...' : selDef ? 'Connect ' + escapeHtml(selDef.label) : 'Connect'}</button>
             </div>`;
         })()}
       </div>
@@ -575,6 +584,7 @@ const CSS = `
     font-size: 12px;
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .mono {
@@ -768,8 +778,13 @@ xai.on('ready', () => {
   loadData();
 
   // Poll every 30 seconds (clear previous if re-initialized)
+  // Skip poll when user is actively interacting with form inputs
   if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(loadData, 30_000);
+  pollTimer = setInterval(() => {
+    const tag = document.activeElement?.tagName;
+    if (tag === 'INPUT' || tag === 'SELECT') return; // don't interrupt typing
+    loadData();
+  }, 30_000);
 
   // Event delegation for disconnect buttons (registered once, not per render)
   if (!(window as any).__cliproxyClickRegistered) {
