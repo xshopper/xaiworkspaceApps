@@ -156,6 +156,9 @@
       var oauthSessionId = 0;
       var selectedProviderId = "";
       var apiKeyDraft = "";
+      var tokenInputDraft = "";
+      var manualTokenOpen = false;
+      var connecting = false;
       function formatDate(iso) {
         if (!iso) return "\u2014";
         try {
@@ -166,6 +169,7 @@
       }
       function showSuccess(msg) {
         state.success = msg;
+        state.error = null;
         if (successTimer) clearTimeout(successTimer);
         successTimer = setTimeout(() => {
           state.success = null;
@@ -191,7 +195,7 @@
             state.tokenStatus = null;
           }
         } catch (err) {
-          state.status = { running: false, port: 4001, providerCount: 0, modelCount: 0 };
+          state.status = null;
           state.providers = [];
           state.tokenStatus = null;
           state.error = err?.message ?? "Could not reach CLIProxyAPI on localhost:4001";
@@ -201,9 +205,7 @@
         }
       }
       async function handleUpdateToken() {
-        const input = document.getElementById("token-input");
-        if (!input) return;
-        const token = input.value.trim();
+        const token = tokenInputDraft.trim();
         if (!token) return;
         const provider = tokenCardProvider || "claude";
         state.error = null;
@@ -213,13 +215,15 @@
           const result = await updateToken(provider, token);
           if (result.ok) {
             showSuccess(result.expired ? `Token updated. Expires: ${formatDate(result.expired)}` : "Token updated successfully.");
-            input.value = "";
+            tokenInputDraft = "";
             await loadData();
           } else {
             state.error = result.error ?? "Token update failed";
+            state.success = null;
           }
         } catch (err) {
           state.error = err?.message ?? "Token update failed";
+          state.success = null;
         } finally {
           state.savingToken = false;
           render();
@@ -239,14 +243,20 @@
           const key = apiKeyDraft.trim();
           if (!key) {
             state.error = "Please enter an API key";
+            state.success = null;
             render();
             return;
           }
+          connecting = true;
+          render();
           connectProvider(selectedProviderId, key);
           selectedProviderId = "";
           apiKeyDraft = "";
-          showSuccess(`API key sent \u2014 check chat for confirmation.`);
-          setTimeout(loadData, 4e3);
+          showSuccess(`API key submitted \u2014 see chat for result.`);
+          setTimeout(() => {
+            connecting = false;
+            loadData();
+          }, 4e3);
         } else {
           handleOAuthConnect(selectedProviderId, def.label).catch((err) => {
             oauthConnecting = false;
@@ -350,7 +360,7 @@
         oauthState = null;
         oauthAuthUrl = null;
         oauthConnecting = false;
-        render();
+        showSuccess("Authentication cancelled.");
       }
       function render() {
         const tokenCardTitle = tokenCardProvider ? tokenCardProvider.charAt(0).toUpperCase() + tokenCardProvider.slice(1) + " OAuth Token" : "OAuth Token";
@@ -446,10 +456,10 @@
         ` : ""}
 
         <!-- Manual token paste (collapsed fallback) -->
-        <details class="form-card">
+        <details class="form-card" ${manualTokenOpen ? "open" : ""} ontoggle="__onTokenToggle()">
           <summary class="form-hint" style="cursor: pointer;">Manual token update (fallback)</summary>
           <div class="form-row" style="margin-top: 8px;">
-            <input type="password" id="token-input" class="form-input mono" placeholder="${escapeHtml(tokenCardProvider === "claude" ? "sk-ant-oat01-..." : "Paste OAuth token...")}" />
+            <input type="password" id="token-input" class="form-input mono" placeholder="${escapeHtml(tokenCardProvider === "claude" ? "sk-ant-oat01-..." : "Paste OAuth token...")}" value="${escapeHtml(tokenInputDraft)}" oninput="__onTokenInput()" />
             <button class="btn btn-primary" onclick="__updateToken()" ${state.savingToken ? "disabled" : ""}>
               ${state.savingToken ? "Updating..." : "Update"}
             </button>
@@ -495,7 +505,7 @@
         ${(() => {
           const selDef = PROVIDERS.find((p) => p.id === selectedProviderId);
           const showKeyRow = selDef?.type === "api-key";
-          const formDisabled = oauthConnecting;
+          const formDisabled = oauthConnecting || connecting;
           const connectDisabled = formDisabled || !selectedProviderId;
           return `
             <div class="form-row">
@@ -523,6 +533,8 @@
         window.__onProviderChange = onProviderChange;
         window.__cancelOAuth = handleCancelOAuth;
         window.__onKeyInput = onKeyInput;
+        window.__onTokenInput = onTokenInput;
+        window.__onTokenToggle = onTokenToggle;
       }
       function onProviderChange() {
         const select = document.getElementById("provider-select");
@@ -534,6 +546,14 @@
       function onKeyInput() {
         const input = document.getElementById("api-key-input");
         if (input) apiKeyDraft = input.value;
+      }
+      function onTokenInput() {
+        const input = document.getElementById("token-input");
+        if (input) tokenInputDraft = input.value;
+      }
+      function onTokenToggle() {
+        const details = document.querySelector(".form-card[ontoggle]");
+        if (details) manualTokenOpen = details.open;
       }
       function escapeHtml(str) {
         return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -603,6 +623,8 @@
   .config-value {
     color: var(--fg-primary, #e5e5e5);
     font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .mono {
@@ -748,7 +770,7 @@
 
   .btn-danger:hover:not(:disabled) { background: rgba(239,68,68,0.1); }
 
-  .btn-sm { font-size: 11px; padding: 3px 8px; }
+  .btn-sm { font-size: 11px; padding: 3px 8px; flex-shrink: 0; }
 
   .empty-text {
     font-size: 12px;

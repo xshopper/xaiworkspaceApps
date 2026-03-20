@@ -46,6 +46,9 @@ let oauthSessionId = 0; // incremented on each new OAuth flow to detect stale po
 // Form state preserved across re-renders
 let selectedProviderId = '';
 let apiKeyDraft = '';
+let tokenInputDraft = '';
+let manualTokenOpen = false;
+let connecting = false; // API key connect in progress
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -62,6 +65,7 @@ function formatDate(iso: string | null): string {
 
 function showSuccess(msg: string) {
   state.success = msg;
+  state.error = null; // clear any existing error — only show one banner at a time
   if (successTimer) clearTimeout(successTimer);
   successTimer = setTimeout(() => { state.success = null; render(); }, 6000);
   render();
@@ -92,7 +96,7 @@ async function loadData() {
       state.tokenStatus = null;
     }
   } catch (err: any) {
-    state.status = { running: false, port: 4001, providerCount: 0, modelCount: 0 };
+    state.status = null; // don't show "Stopped" on network errors — status is unknown
     state.providers = [];
     state.tokenStatus = null;
     state.error = err?.message ?? 'Could not reach CLIProxyAPI on localhost:4001';
@@ -107,9 +111,7 @@ async function loadData() {
 // ---------------------------------------------------------------------------
 
 async function handleUpdateToken() {
-  const input = document.getElementById('token-input') as HTMLInputElement | null;
-  if (!input) return;
-  const token = input.value.trim();
+  const token = tokenInputDraft.trim();
   if (!token) return;
 
   // Use the provider the token card is actually showing
@@ -123,13 +125,15 @@ async function handleUpdateToken() {
     const result = await updateToken(provider, token);
     if (result.ok) {
       showSuccess(result.expired ? `Token updated. Expires: ${formatDate(result.expired)}` : 'Token updated successfully.');
-      input.value = '';
+      tokenInputDraft = '';
       await loadData(); // refresh status
     } else {
       state.error = result.error ?? 'Token update failed';
+      state.success = null;
     }
   } catch (err: any) {
     state.error = err?.message ?? 'Token update failed';
+    state.success = null;
   } finally {
     state.savingToken = false;
     render();
@@ -151,13 +155,15 @@ function handleConnect() {
 
   if (def.type === 'api-key') {
     const key = apiKeyDraft.trim();
-    if (!key) { state.error = 'Please enter an API key'; render(); return; }
+    if (!key) { state.error = 'Please enter an API key'; state.success = null; render(); return; }
+    connecting = true;
+    render();
     connectProvider(selectedProviderId, key);
     // Reset form after submit
     selectedProviderId = '';
     apiKeyDraft = '';
-    showSuccess(`API key sent — check chat for confirmation.`);
-    setTimeout(loadData, 4000);
+    showSuccess(`API key submitted — see chat for result.`);
+    setTimeout(() => { connecting = false; loadData(); }, 4000);
   } else {
     // CLI subscription — start OAuth via CLIProxyAPI or chat
     handleOAuthConnect(selectedProviderId, def.label).catch(err => {
@@ -280,7 +286,7 @@ function handleCancelOAuth() {
   oauthState = null;
   oauthAuthUrl = null;
   oauthConnecting = false;
-  render();
+  showSuccess('Authentication cancelled.');
 }
 
 // ---------------------------------------------------------------------------
@@ -383,10 +389,10 @@ function render() {
         ` : ''}
 
         <!-- Manual token paste (collapsed fallback) -->
-        <details class="form-card">
+        <details class="form-card" ${manualTokenOpen ? 'open' : ''} ontoggle="__onTokenToggle()">
           <summary class="form-hint" style="cursor: pointer;">Manual token update (fallback)</summary>
           <div class="form-row" style="margin-top: 8px;">
-            <input type="password" id="token-input" class="form-input mono" placeholder="${escapeHtml(tokenCardProvider === 'claude' ? 'sk-ant-oat01-...' : 'Paste OAuth token...')}" />
+            <input type="password" id="token-input" class="form-input mono" placeholder="${escapeHtml(tokenCardProvider === 'claude' ? 'sk-ant-oat01-...' : 'Paste OAuth token...')}" value="${escapeHtml(tokenInputDraft)}" oninput="__onTokenInput()" />
             <button class="btn btn-primary" onclick="__updateToken()" ${state.savingToken ? 'disabled' : ''}>
               ${state.savingToken ? 'Updating...' : 'Update'}
             </button>
@@ -432,7 +438,7 @@ function render() {
         ${(() => {
           const selDef = PROVIDERS.find(p => p.id === selectedProviderId);
           const showKeyRow = selDef?.type === 'api-key';
-          const formDisabled = oauthConnecting;
+          const formDisabled = oauthConnecting || connecting;
           const connectDisabled = formDisabled || !selectedProviderId;
           return `
             <div class="form-row">
@@ -463,6 +469,8 @@ function render() {
   (window as any).__onProviderChange = onProviderChange;
   (window as any).__cancelOAuth = handleCancelOAuth;
   (window as any).__onKeyInput = onKeyInput;
+  (window as any).__onTokenInput = onTokenInput;
+  (window as any).__onTokenToggle = onTokenToggle;
 }
 
 function onProviderChange() {
@@ -476,6 +484,16 @@ function onProviderChange() {
 function onKeyInput() {
   const input = document.getElementById('api-key-input') as HTMLInputElement | null;
   if (input) apiKeyDraft = input.value;
+}
+
+function onTokenInput() {
+  const input = document.getElementById('token-input') as HTMLInputElement | null;
+  if (input) tokenInputDraft = input.value;
+}
+
+function onTokenToggle() {
+  const details = document.querySelector('.form-card[ontoggle]') as HTMLDetailsElement | null;
+  if (details) manualTokenOpen = details.open;
 }
 
 // ---------------------------------------------------------------------------
@@ -555,6 +573,8 @@ const CSS = `
   .config-value {
     color: var(--fg-primary, #e5e5e5);
     font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .mono {
@@ -700,7 +720,7 @@ const CSS = `
 
   .btn-danger:hover:not(:disabled) { background: rgba(239,68,68,0.1); }
 
-  .btn-sm { font-size: 11px; padding: 3px 8px; }
+  .btn-sm { font-size: 11px; padding: 3px 8px; flex-shrink: 0; }
 
   .empty-text {
     font-size: 12px;
