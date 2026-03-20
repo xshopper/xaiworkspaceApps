@@ -43,6 +43,10 @@ let oauthAuthUrl: string | null = null;
 let tokenCardProvider: string | null = null; // which CLI provider the token card is showing
 let oauthSessionId = 0; // incremented on each new OAuth flow to detect stale polls
 
+// Form state preserved across re-renders
+let selectedProviderId = '';
+let apiKeyDraft = '';
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -118,7 +122,7 @@ async function handleUpdateToken() {
   try {
     const result = await updateToken(provider, token);
     if (result.ok) {
-      showSuccess(`Token updated. Expires: ${formatDate(result.expired ?? null)}`);
+      showSuccess(result.expired ? `Token updated. Expires: ${formatDate(result.expired)}` : 'Token updated successfully.');
       input.value = '';
       await loadData(); // refresh status
     } else {
@@ -133,38 +137,35 @@ async function handleUpdateToken() {
 }
 
 function handleDisconnect(providerName: string) {
+  if (!confirm(`Disconnect ${providerName}?`)) return;
   disconnectProvider(providerName);
-  showSuccess(`Disconnect requested for ${providerName} — check chat for confirmation.`);
+  showSuccess(`Disconnecting ${providerName}... Check chat for status.`);
   setTimeout(loadData, 4000);
 }
 
 function handleConnect() {
-  const select = document.getElementById('provider-select') as HTMLSelectElement | null;
-  const keyInput = document.getElementById('api-key-input') as HTMLInputElement | null;
-  if (!select) return;
+  if (!selectedProviderId) return;
 
-  const providerId = select.value;
-  if (!providerId) return;
-
-  const def = PROVIDERS.find(p => p.id === providerId);
+  const def = PROVIDERS.find(p => p.id === selectedProviderId);
   if (!def) return;
 
   if (def.type === 'api-key') {
-    const key = keyInput?.value.trim();
+    const key = apiKeyDraft.trim();
     if (!key) { state.error = 'Please enter an API key'; render(); return; }
-    connectProvider(providerId, key);
+    connectProvider(selectedProviderId, key);
+    // Reset form after submit
+    selectedProviderId = '';
+    apiKeyDraft = '';
+    showSuccess(`API key sent — check chat for confirmation.`);
+    setTimeout(loadData, 4000);
   } else {
     // CLI subscription — start OAuth via CLIProxyAPI or chat
-    handleOAuthConnect(providerId, def.label).catch(err => {
+    handleOAuthConnect(selectedProviderId, def.label).catch(err => {
       oauthConnecting = false;
       state.error = err?.message ?? 'OAuth failed to start';
       render();
     });
-    return;
   }
-
-  showSuccess(`Connecting ${def.label}... Check chat for auth instructions.`);
-  if (keyInput) keyInput.value = '';
 }
 
 async function handleOAuthConnect(providerId: string, label: string) {
@@ -385,12 +386,24 @@ function render() {
         <details class="form-card">
           <summary class="form-hint" style="cursor: pointer;">Manual token update (fallback)</summary>
           <div class="form-row" style="margin-top: 8px;">
-            <input type="text" id="token-input" class="form-input mono" placeholder="sk-ant-oat01-..." />
+            <input type="password" id="token-input" class="form-input mono" placeholder="${escapeHtml(tokenCardProvider === 'claude' ? 'sk-ant-oat01-...' : 'Paste OAuth token...')}" />
             <button class="btn btn-primary" onclick="__updateToken()" ${state.savingToken ? 'disabled' : ''}>
               ${state.savingToken ? 'Updating...' : 'Update'}
             </button>
           </div>
         </details>
+      </div>
+      ` : ''}
+
+      <!-- OAuth Connecting State (shown above providers for visibility) -->
+      ${oauthConnecting ? `
+      <div class="card">
+        <h2 class="section-heading">Authenticating...</h2>
+        <p class="form-hint">Complete the authentication in the browser tab. This will update automatically.</p>
+        ${oauthAuthUrl ? `<p class="form-hint"><a href="${escapeHtml(oauthAuthUrl)}" target="_blank" rel="noopener noreferrer" style="color: var(--fg-link, #3b82f6);">Open authentication page</a></p>` : ''}
+        <div class="form-row">
+          <button class="btn btn-secondary" onclick="__cancelOAuth()">Cancel</button>
+        </div>
       </div>
       ` : ''}
 
@@ -413,34 +426,30 @@ function render() {
         `}
       </div>
 
-      <!-- OAuth Connecting State -->
-      ${oauthConnecting ? `
-      <div class="card">
-        <h2 class="section-heading">Authenticating...</h2>
-        <p class="form-hint">Complete the authentication in the browser tab. This will update automatically.</p>
-        ${oauthAuthUrl ? `<p class="form-hint"><a href="${escapeHtml(oauthAuthUrl)}" target="_blank" rel="noopener noreferrer" style="color: var(--fg-link, #3b82f6);">Open authentication page</a></p>` : ''}
-        <div class="form-row">
-          <button class="btn btn-secondary" onclick="__cancelOAuth()">Cancel</button>
-        </div>
-      </div>
-      ` : ''}
-
       <!-- Connect Form -->
       <div class="card">
         <h2 class="section-heading">Connect Provider</h2>
-        <div class="form-row">
-          <select id="provider-select" class="form-input" onchange="__onProviderChange()" ${oauthConnecting ? 'disabled' : ''}>
-            <option value="">Select a provider...</option>
-            ${PROVIDERS.map(p => `<option value="${p.id}">${escapeHtml(p.label)}</option>`).join('')}
-          </select>
-        </div>
-        <div id="provider-hint" class="form-hint" style="display:none"></div>
-        <div id="api-key-row" class="form-row" style="display:none">
-          <input type="text" id="api-key-input" class="form-input mono" placeholder="Paste your API key..." />
-        </div>
-        <div class="form-row">
-          <button class="btn btn-primary" onclick="__connect()" ${oauthConnecting ? 'disabled' : ''}>Connect</button>
-        </div>
+        ${(() => {
+          const selDef = PROVIDERS.find(p => p.id === selectedProviderId);
+          const showKeyRow = selDef?.type === 'api-key';
+          const formDisabled = oauthConnecting;
+          const connectDisabled = formDisabled || !selectedProviderId;
+          return `
+            <div class="form-row">
+              <select id="provider-select" class="form-input" onchange="__onProviderChange()" ${formDisabled ? 'disabled' : ''}>
+                <option value="">Select a provider...</option>
+                ${PROVIDERS.map(p => `<option value="${p.id}" ${p.id === selectedProviderId ? 'selected' : ''}>${escapeHtml(p.label)}</option>`).join('')}
+              </select>
+            </div>
+            ${selDef ? `<div class="form-hint">${escapeHtml(selDef.hint)}</div>` : ''}
+            ${showKeyRow ? `
+            <div class="form-row">
+              <input type="password" id="api-key-input" class="form-input mono" placeholder="Paste your API key..." value="${escapeHtml(apiKeyDraft)}" oninput="__onKeyInput()" />
+            </div>` : ''}
+            <div class="form-row">
+              <button class="btn btn-primary" onclick="__connect()" ${connectDisabled ? 'disabled' : ''}>Connect</button>
+            </div>`;
+        })()}
       </div>
     </div>
   `;
@@ -453,23 +462,20 @@ function render() {
   (window as any).__connect = handleConnect;
   (window as any).__onProviderChange = onProviderChange;
   (window as any).__cancelOAuth = handleCancelOAuth;
+  (window as any).__onKeyInput = onKeyInput;
 }
 
 function onProviderChange() {
   const select = document.getElementById('provider-select') as HTMLSelectElement | null;
-  const hintEl = document.getElementById('provider-hint');
-  const keyRow = document.getElementById('api-key-row');
-  if (!select || !hintEl || !keyRow) return;
+  if (!select) return;
+  selectedProviderId = select.value;
+  apiKeyDraft = ''; // reset key when provider changes
+  render();
+}
 
-  const def = PROVIDERS.find(p => p.id === select.value);
-  if (def) {
-    hintEl.textContent = def.hint;
-    hintEl.style.display = 'block';
-    keyRow.style.display = def.type === 'api-key' ? 'flex' : 'none';
-  } else {
-    hintEl.style.display = 'none';
-    keyRow.style.display = 'none';
-  }
+function onKeyInput() {
+  const input = document.getElementById('api-key-input') as HTMLInputElement | null;
+  if (input) apiKeyDraft = input.value;
 }
 
 // ---------------------------------------------------------------------------
@@ -737,6 +743,8 @@ const CSS = `
 // ---------------------------------------------------------------------------
 
 xai.on('ready', () => {
+  state.loading = true;
+  render(); // show loading state immediately
   loadData();
 
   // Poll every 30 seconds (clear previous if re-initialized)

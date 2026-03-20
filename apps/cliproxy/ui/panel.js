@@ -154,6 +154,8 @@
       var oauthAuthUrl = null;
       var tokenCardProvider = null;
       var oauthSessionId = 0;
+      var selectedProviderId = "";
+      var apiKeyDraft = "";
       function formatDate(iso) {
         if (!iso) return "\u2014";
         try {
@@ -210,7 +212,7 @@
         try {
           const result = await updateToken(provider, token);
           if (result.ok) {
-            showSuccess(`Token updated. Expires: ${formatDate(result.expired ?? null)}`);
+            showSuccess(result.expired ? `Token updated. Expires: ${formatDate(result.expired)}` : "Token updated successfully.");
             input.value = "";
             await loadData();
           } else {
@@ -224,36 +226,34 @@
         }
       }
       function handleDisconnect(providerName) {
+        if (!confirm(`Disconnect ${providerName}?`)) return;
         disconnectProvider(providerName);
-        showSuccess(`Disconnect requested for ${providerName} \u2014 check chat for confirmation.`);
+        showSuccess(`Disconnecting ${providerName}... Check chat for status.`);
         setTimeout(loadData, 4e3);
       }
       function handleConnect() {
-        const select = document.getElementById("provider-select");
-        const keyInput = document.getElementById("api-key-input");
-        if (!select) return;
-        const providerId = select.value;
-        if (!providerId) return;
-        const def = PROVIDERS.find((p) => p.id === providerId);
+        if (!selectedProviderId) return;
+        const def = PROVIDERS.find((p) => p.id === selectedProviderId);
         if (!def) return;
         if (def.type === "api-key") {
-          const key = keyInput?.value.trim();
+          const key = apiKeyDraft.trim();
           if (!key) {
             state.error = "Please enter an API key";
             render();
             return;
           }
-          connectProvider(providerId, key);
+          connectProvider(selectedProviderId, key);
+          selectedProviderId = "";
+          apiKeyDraft = "";
+          showSuccess(`API key sent \u2014 check chat for confirmation.`);
+          setTimeout(loadData, 4e3);
         } else {
-          handleOAuthConnect(providerId, def.label).catch((err) => {
+          handleOAuthConnect(selectedProviderId, def.label).catch((err) => {
             oauthConnecting = false;
             state.error = err?.message ?? "OAuth failed to start";
             render();
           });
-          return;
         }
-        showSuccess(`Connecting ${def.label}... Check chat for auth instructions.`);
-        if (keyInput) keyInput.value = "";
       }
       async function handleOAuthConnect(providerId, label) {
         if (oauthConnecting) {
@@ -449,12 +449,24 @@
         <details class="form-card">
           <summary class="form-hint" style="cursor: pointer;">Manual token update (fallback)</summary>
           <div class="form-row" style="margin-top: 8px;">
-            <input type="text" id="token-input" class="form-input mono" placeholder="sk-ant-oat01-..." />
+            <input type="password" id="token-input" class="form-input mono" placeholder="${escapeHtml(tokenCardProvider === "claude" ? "sk-ant-oat01-..." : "Paste OAuth token...")}" />
             <button class="btn btn-primary" onclick="__updateToken()" ${state.savingToken ? "disabled" : ""}>
               ${state.savingToken ? "Updating..." : "Update"}
             </button>
           </div>
         </details>
+      </div>
+      ` : ""}
+
+      <!-- OAuth Connecting State (shown above providers for visibility) -->
+      ${oauthConnecting ? `
+      <div class="card">
+        <h2 class="section-heading">Authenticating...</h2>
+        <p class="form-hint">Complete the authentication in the browser tab. This will update automatically.</p>
+        ${oauthAuthUrl ? `<p class="form-hint"><a href="${escapeHtml(oauthAuthUrl)}" target="_blank" rel="noopener noreferrer" style="color: var(--fg-link, #3b82f6);">Open authentication page</a></p>` : ""}
+        <div class="form-row">
+          <button class="btn btn-secondary" onclick="__cancelOAuth()">Cancel</button>
+        </div>
       </div>
       ` : ""}
 
@@ -477,34 +489,30 @@
         `}
       </div>
 
-      <!-- OAuth Connecting State -->
-      ${oauthConnecting ? `
-      <div class="card">
-        <h2 class="section-heading">Authenticating...</h2>
-        <p class="form-hint">Complete the authentication in the browser tab. This will update automatically.</p>
-        ${oauthAuthUrl ? `<p class="form-hint"><a href="${escapeHtml(oauthAuthUrl)}" target="_blank" rel="noopener noreferrer" style="color: var(--fg-link, #3b82f6);">Open authentication page</a></p>` : ""}
-        <div class="form-row">
-          <button class="btn btn-secondary" onclick="__cancelOAuth()">Cancel</button>
-        </div>
-      </div>
-      ` : ""}
-
       <!-- Connect Form -->
       <div class="card">
         <h2 class="section-heading">Connect Provider</h2>
-        <div class="form-row">
-          <select id="provider-select" class="form-input" onchange="__onProviderChange()" ${oauthConnecting ? "disabled" : ""}>
-            <option value="">Select a provider...</option>
-            ${PROVIDERS.map((p) => `<option value="${p.id}">${escapeHtml(p.label)}</option>`).join("")}
-          </select>
-        </div>
-        <div id="provider-hint" class="form-hint" style="display:none"></div>
-        <div id="api-key-row" class="form-row" style="display:none">
-          <input type="text" id="api-key-input" class="form-input mono" placeholder="Paste your API key..." />
-        </div>
-        <div class="form-row">
-          <button class="btn btn-primary" onclick="__connect()" ${oauthConnecting ? "disabled" : ""}>Connect</button>
-        </div>
+        ${(() => {
+          const selDef = PROVIDERS.find((p) => p.id === selectedProviderId);
+          const showKeyRow = selDef?.type === "api-key";
+          const formDisabled = oauthConnecting;
+          const connectDisabled = formDisabled || !selectedProviderId;
+          return `
+            <div class="form-row">
+              <select id="provider-select" class="form-input" onchange="__onProviderChange()" ${formDisabled ? "disabled" : ""}>
+                <option value="">Select a provider...</option>
+                ${PROVIDERS.map((p) => `<option value="${p.id}" ${p.id === selectedProviderId ? "selected" : ""}>${escapeHtml(p.label)}</option>`).join("")}
+              </select>
+            </div>
+            ${selDef ? `<div class="form-hint">${escapeHtml(selDef.hint)}</div>` : ""}
+            ${showKeyRow ? `
+            <div class="form-row">
+              <input type="password" id="api-key-input" class="form-input mono" placeholder="Paste your API key..." value="${escapeHtml(apiKeyDraft)}" oninput="__onKeyInput()" />
+            </div>` : ""}
+            <div class="form-row">
+              <button class="btn btn-primary" onclick="__connect()" ${connectDisabled ? "disabled" : ""}>Connect</button>
+            </div>`;
+        })()}
       </div>
     </div>
   `;
@@ -514,21 +522,18 @@
         window.__connect = handleConnect;
         window.__onProviderChange = onProviderChange;
         window.__cancelOAuth = handleCancelOAuth;
+        window.__onKeyInput = onKeyInput;
       }
       function onProviderChange() {
         const select = document.getElementById("provider-select");
-        const hintEl = document.getElementById("provider-hint");
-        const keyRow = document.getElementById("api-key-row");
-        if (!select || !hintEl || !keyRow) return;
-        const def = PROVIDERS.find((p) => p.id === select.value);
-        if (def) {
-          hintEl.textContent = def.hint;
-          hintEl.style.display = "block";
-          keyRow.style.display = def.type === "api-key" ? "flex" : "none";
-        } else {
-          hintEl.style.display = "none";
-          keyRow.style.display = "none";
-        }
+        if (!select) return;
+        selectedProviderId = select.value;
+        apiKeyDraft = "";
+        render();
+      }
+      function onKeyInput() {
+        const input = document.getElementById("api-key-input");
+        if (input) apiKeyDraft = input.value;
       }
       function escapeHtml(str) {
         return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -781,6 +786,8 @@
   }
 `;
       xai.on("ready", () => {
+        state.loading = true;
+        render();
         loadData();
         if (pollTimer) clearInterval(pollTimer);
         pollTimer = setInterval(loadData, 3e4);
