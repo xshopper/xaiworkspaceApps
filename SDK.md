@@ -97,6 +97,7 @@ These fields apply to all five kinds.
 | `model` | string | No | Platform default | Preferred AI model (e.g. `claude-sonnet-4-6`, `claude-haiku-4-5-20251001`) |
 | `modelFallback` | array | No | — | Ordered list of fallback models if the preferred model is unavailable |
 | `sandbox` | string | No | `strict` | Execution isolation level: `strict`, `relaxed`, or `none` |
+| `identifier` | string | No | — | Reverse-domain identifier (e.g. `com.xshopper.my-app`). Used for registry uniqueness. |
 | `categories` | array | No | — | Marketplace category tags (e.g. `[productivity, communication]`) |
 
 ### Optional Fields
@@ -109,6 +110,7 @@ These fields apply to all five kinds.
 | `approvalRequired` | array | Action names that require explicit user confirmation before execution |
 | `dependencies` | array | Slugs of skills or tools this component requires |
 | `entrypoint` | string | Inline JavaScript executed inside the sandbox for programmatic components |
+| `ui` | object | UI panel configuration. When present, the platform renders the app in a side panel alongside chat |
 
 ### Skill-Specific Fields
 
@@ -209,6 +211,7 @@ name: Expense Tracker
 description: Track business expenses from receipts, invoices, and bank statements. Categorize and generate reports.
 icon: 💰
 version: 1.0.0
+identifier: com.xshopper.expense-tracker
 
 persona:
   soul: You are a meticulous financial assistant. Be precise with numbers, always use the user's preferred currency.
@@ -227,6 +230,7 @@ triggers:
     config: { event: "file.uploaded", filter: { mime: ["image/jpeg", "image/png", "application/pdf"] } }
 
 model: claude-sonnet-4-6
+modelFallback: [claude-haiku-4-5-20251001]
 sandbox: strict
 approvalRequired: [expense.delete, report.export]
 ```
@@ -322,6 +326,7 @@ output:
       type: integer
 
 model: claude-haiku-4-5-20251001
+modelFallback: [claude-sonnet-4-6]
 sandbox: strict
 ```
 
@@ -448,6 +453,18 @@ Permissions are declared up front in the manifest and enforced at runtime. A com
 | `tool.list` | Enumerate available tools |
 | `memory.read` | Read from the AI's long-term memory |
 | `memory.write` | Write to the AI's long-term memory |
+
+**network** — HTTP access for sandbox apps:
+
+| Permission | What it grants |
+|-----------|---------------|
+| `localhost:PORT` | Allow `xai.http()` calls to `http://localhost:PORT`. The host proxies the request. |
+
+Example:
+```yaml
+permissions:
+  network: [localhost:4001]
+```
 
 **device** — User device access (requires explicit user grant):
 
@@ -719,6 +736,7 @@ The sandbox communicates with the host via a structured postMessage protocol. Yo
 | `sandbox:storage` | Key-value storage read or write |
 | `sandbox:approval` | Requesting user confirmation for an `approvalRequired` action |
 | `sandbox:render` | Injecting safe HTML into the host UI |
+| `sandbox:http` | Proxied HTTP request (requires `permissions.network` declaration) |
 
 **Host to sandbox:**
 
@@ -729,6 +747,73 @@ The sandbox communicates with the host via a structured postMessage protocol. Yo
 | `host:event` | Delivering a trigger event |
 | `host:chat.message` | Incoming user message |
 | `host:shutdown` | Instructing the sandbox to terminate cleanly |
+
+### SDK API Reference
+
+The platform SDK is injected as `window.xai` into every sandbox iframe. Key methods:
+
+| Method | Description |
+|--------|-------------|
+| `xai.render(html)` | Replace `#app` innerHTML with the given HTML string |
+| `xai.http(url, options?)` | Proxied HTTP request. Options: `{ method, headers, body }`. Returns `Promise<{ status, data }>`. Requires `permissions.network` |
+| `xai.storage.get(key)` | Read a value from app-scoped storage |
+| `xai.storage.set(key, value)` | Write a value to app-scoped storage |
+| `xai.storage.delete(key)` | Delete a key from storage |
+| `xai.storage.list(prefix?)` | List storage entries matching a prefix |
+| `xai.chat.send(text, buttons?)` | Send a chat message with optional button rows |
+| `xai.on(event, handler)` | Listen for events: `ready`, `chat.message`, `shutdown`, `trigger.*` |
+| `xai.request(action, data)` | Generic permission-scoped platform request |
+| `xai.requestApproval(action, desc)` | Request user confirmation. Returns `Promise<boolean>` |
+| `xai.tools.execute(slug, op, params?)` | Execute an installed tool operation |
+| `xai.tools.list()` | List available tools |
+| `xai.memory.get(cat, key)` | Read from persistent memory |
+| `xai.memory.set(cat, key, value, opts?)` | Write to persistent memory |
+| `xai.memory.search(query)` | Search memory |
+| `xai.log(msg, data?)` | Log a message (forwarded to host) |
+
+**`xai.http()` example:**
+
+```javascript
+// Requires: permissions.network: [localhost:4001]
+const res = await xai.http('http://localhost:4001/v1/models');
+console.log(res.data); // { data: [{ id: 'grok-3', ... }] }
+
+const postRes = await xai.http('http://localhost:4001/admin/token', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ access_token: 'sk-ant-...' })
+});
+```
+
+### UI Panel
+
+Apps can declare a `ui` field in their manifest to render a custom interface in a side panel alongside the chat. When present, the platform loads the app's sandbox iframe in the right panel instead of inline.
+
+```yaml
+ui:
+  type: panel    # Currently the only type; renders as a right-side panel
+  title: My App  # Panel header title
+```
+
+The app uses `xai.render(html)` inside its `entrypoint` to control what appears in the panel. The entrypoint is standard inline JavaScript (or compiled from TypeScript). All SDK methods (`xai.http()`, `xai.storage`, `xai.chat`, etc.) are available.
+
+**Example: minimal panel app**
+
+```yaml
+slug: my-panel-app
+kind: app
+name: My Panel App
+ui:
+  type: panel
+  title: Dashboard
+permissions:
+  chat: [chat.send]
+sandbox: relaxed
+entrypoint: |
+  xai.on('ready', () => {
+    xai.render('<h1>Hello from the panel!</h1>');
+  });
+```
 
 ### Security Boundaries
 
@@ -1024,6 +1109,7 @@ name: Summarize Text
 description: Summarizes any text into key points — emails, documents, articles, chat threads
 icon: ⚡
 version: 1.0.0
+identifier: com.xshopper.summarize-text
 
 input:
   type: object
@@ -1062,6 +1148,7 @@ name: Extract Structured Data
 description: Extracts structured data from unstructured text — invoices, receipts, contracts, forms
 icon: 📋
 version: 1.0.0
+identifier: com.xshopper.extract-data
 
 input:
   type: object
@@ -1088,6 +1175,7 @@ output:
       description: Confidence score 0-1
 
 model: claude-sonnet-4-6
+modelFallback: [claude-haiku-4-5-20251001]
 sandbox: strict
 ```
 
@@ -1100,6 +1188,7 @@ name: Expense Tracker
 description: Track business expenses from receipts, invoices, and bank statements. Categorize and generate reports.
 icon: 💰
 version: 1.0.0
+identifier: com.xshopper.expense-tracker
 
 persona:
   soul: You are a meticulous financial assistant. Be precise with numbers, always use the user's preferred currency.
@@ -1118,6 +1207,7 @@ triggers:
     config: { event: "file.uploaded", filter: { mime: ["image/jpeg", "image/png", "application/pdf"] } }
 
 model: claude-sonnet-4-6
+modelFallback: [claude-haiku-4-5-20251001]
 sandbox: strict
 approvalRequired: [expense.delete, report.export]
 ```
@@ -1131,6 +1221,7 @@ name: Email Manager
 description: Watches your inbox, archives junk, summarizes important emails, and drafts replies
 icon: 📧
 version: 1.0.0
+identifier: com.xshopper.email-manager
 
 persona:
   soul: You are a professional email assistant. Be concise, clear, and respect the user's communication style.
@@ -1151,6 +1242,7 @@ triggers:
     config: { event: "email.received" }
 
 model: claude-sonnet-4-6
+modelFallback: [claude-haiku-4-5-20251001]
 sandbox: strict
 approvalRequired: [email.delete, email.send]
 ```
@@ -1164,6 +1256,7 @@ name: Code Reviewer
 description: Reviews pull requests, suggests improvements, checks for security issues and code quality
 icon: 🔍
 version: 1.0.0
+identifier: com.xshopper.code-reviewer
 
 persona:
   soul: You are a senior software engineer doing code review. Be constructive, specific, and educational.
@@ -1183,6 +1276,7 @@ triggers:
     config: { path: "/hooks/github-pr", events: ["pull_request.opened", "pull_request.synchronize"] }
 
 model: claude-sonnet-4-6
+modelFallback: [claude-opus-4-6]
 sandbox: strict
 dependencies: [summarize-text]
 ```
@@ -1196,6 +1290,7 @@ name: Sales Assistant
 description: Helps manage leads, draft proposals, follow up with prospects, and track pipeline
 icon: 💼
 version: 1.0.0
+identifier: com.xshopper.sales-assistant
 
 persona:
   soul: |
@@ -1236,6 +1331,7 @@ name: Support Bot
 description: Handles customer support tickets — triages, responds to common questions, escalates complex issues
 icon: 🛠
 version: 1.0.0
+identifier: com.xshopper.support-bot
 
 persona:
   soul: |
@@ -1272,6 +1368,7 @@ name: Google Sheets
 description: Read, write, and manage Google Sheets spreadsheets
 icon: 📊
 version: 1.0.0
+identifier: com.xshopper.google-sheets
 
 authProvider: google
 baseUrl: https://sheets.googleapis.com/v4
@@ -1324,6 +1421,7 @@ name: GitHub Issues
 description: Create, read, update, and manage GitHub issues and labels
 icon: 🐛
 version: 1.0.0
+identifier: com.xshopper.github-issues
 
 authProvider: github
 baseUrl: https://api.github.com
@@ -1399,4 +1497,64 @@ For skills, you can test the input/output contract by installing the skill and c
 
 ```
 call summarize-text text="Your test content here" style=bullets
+```
+
+### E2E Testing with done24bot
+
+For full end-to-end testing against a live xAI Workspace instance, use [done24bot.com](https://done24bot.com) as a remote browser backend with Jest + Puppeteer.
+
+**Setup:**
+
+```bash
+npm install --save-dev puppeteer-core jest ts-jest @types/jest
+```
+
+**jest.config.js:**
+
+```javascript
+module.exports = {
+  preset: 'ts-jest',
+  testEnvironment: 'node',
+  testMatch: ['<rootDir>/e2e/**/*.spec.ts'],
+  testTimeout: 120_000,
+  maxWorkers: 1,
+};
+```
+
+**e2e/helpers.ts** (connects to done24bot, logs in, sends messages):
+
+```typescript
+import puppeteer, { Browser, Page } from 'puppeteer-core';
+
+// Fetch the real WebSocket URL (CloudFront does NOT proxy WebSocket)
+async function getWsUrl(): Promise<string> {
+  const res = await fetch('https://done24bot.com/done24bot_outputs.json');
+  const config: any = await res.json();
+  const ws = config.custom.WEBSOCKET_API;
+  return `${ws.endpoint}/${ws.stageName}`;
+}
+
+export async function setup(): Promise<Page> {
+  const wsUrl = await getWsUrl();
+  const browser = await puppeteer.connect({
+    browserWSEndpoint: `${wsUrl}?apiKey=${process.env.D24_API_KEY}`,
+    protocolTimeout: 120_000,
+  });
+  const page = await browser.newPage();
+  await page.goto('https://xaiworkspace.com', { waitUntil: 'networkidle2', timeout: 60_000 });
+  // Login if needed, then return page
+  return page;
+}
+```
+
+**Key considerations:**
+- Use `page.evaluate()` for all DOM interaction (Puppeteer's `page.type()` is extremely slow over the WebSocket relay)
+- Set `protocolTimeout: 120_000` (default 30s is too low for the relay)
+- Always call `browser.disconnect()` (not `browser.close()`) — close would shut down the remote Chrome
+- The done24bot Chrome extension must be running and connected before tests start
+
+**Running tests:**
+
+```bash
+D24_API_KEY=your_key npm test
 ```

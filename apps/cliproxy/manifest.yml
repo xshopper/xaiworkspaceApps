@@ -6,6 +6,10 @@ description: Connect your API keys and CLI subscriptions (Grok, Claude, Gemini, 
 icon: "\U0001F50C"
 version: 1.0.0
 
+ui:
+  type: panel
+  title: CLI Proxy
+
 persona:
   soul: |
     You are the CLI Proxy manager. You help users connect AI provider
@@ -266,6 +270,7 @@ persona:
 permissions:
   resources: [storage]
   chat: [chat.send, chat.read, chat.listen]
+  network: [localhost:4001]
 
 help: |
   Connect your AI provider API keys and CLI subscriptions so they become
