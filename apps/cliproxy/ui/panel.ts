@@ -1,15 +1,16 @@
 import type { PanelState, ProviderDef } from './types';
-import { getModels, deriveStatus, groupProviders, getTokenStatus, updateToken, disconnectProvider, connectProvider } from './api';
+import { getModels, deriveStatus, groupProviders, getTokenStatus, updateToken, disconnectProvider, connectProvider, startCliOAuth, pollCliOAuth } from './api';
 
 // ---------------------------------------------------------------------------
 // Provider definitions for the connect form
 // ---------------------------------------------------------------------------
 
 const PROVIDERS: ProviderDef[] = [
-  { id: 'claude',      label: 'Claude (CLI)',    type: 'cli-subscription', hint: 'Browser OAuth — no API key needed' },
-  { id: 'gemini',      label: 'Gemini (CLI)',    type: 'cli-subscription', hint: 'Browser OAuth — no API key needed' },
-  { id: 'codex',       label: 'Codex (CLI)',     type: 'cli-subscription', hint: 'Browser OAuth — no API key needed' },
-  { id: 'qwen',        label: 'Qwen (CLI)',      type: 'cli-subscription', hint: 'Browser OAuth — no API key needed' },
+  { id: 'claude',      label: 'Claude Code',       type: 'cli-subscription', hint: 'Browser OAuth — no API key needed' },
+  { id: 'codex',       label: 'OpenAI Codex',      type: 'cli-subscription', hint: 'Browser OAuth — GPT models' },
+  { id: 'gemini',      label: 'Gemini CLI',        type: 'cli-subscription', hint: 'Browser OAuth — no API key needed' },
+  { id: 'qwen',        label: 'Qwen Code',         type: 'cli-subscription', hint: 'Browser OAuth — no API key needed' },
+  { id: 'iflow',       label: 'iFlow',             type: 'cli-subscription', hint: 'Browser OAuth — no API key needed' },
   { id: 'zai',         label: 'Z.ai / Zhipu',    type: 'api-key',          hint: 'Get key at z.ai' },
   { id: 'grok',        label: 'xAI Grok',        type: 'api-key',          hint: 'Get key at console.x.ai' },
   { id: 'openai',      label: 'OpenAI',          type: 'api-key',          hint: 'Get key at platform.openai.com' },
@@ -35,6 +36,12 @@ const state: PanelState = {
 
 let successTimer: ReturnType<typeof setTimeout> | null = null;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+let oauthPollTimer: ReturnType<typeof setTimeout> | null = null;
+let oauthState: string | null = null;
+let oauthConnecting = false;
+let oauthAuthUrl: string | null = null;
+let tokenCardProvider: string | null = null; // which CLI provider the token card is showing
+let oauthSessionId = 0; // incremented on each new OAuth flow to detect stale polls
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -53,6 +60,7 @@ function showSuccess(msg: string) {
   state.success = msg;
   if (successTimer) clearTimeout(successTimer);
   successTimer = setTimeout(() => { state.success = null; render(); }, 6000);
+  render();
 }
 
 // ---------------------------------------------------------------------------
@@ -69,11 +77,14 @@ async function loadData() {
     state.status = deriveStatus(models);
     state.providers = groupProviders(models.data);
 
-    // Try to get Claude token status (primary CLI subscription)
-    const claudeProvider = state.providers.find(p => p.name === 'claude');
-    if (claudeProvider) {
-      state.tokenStatus = await getTokenStatus('claude');
+    // Get token status — prefer 'claude' if connected, else first CLI subscription
+    const cliProviders = state.providers.filter(p => p.type === 'cli-subscription');
+    const cliProvider = cliProviders.find(p => p.name === 'claude') ?? cliProviders[0] ?? null;
+    if (cliProvider) {
+      tokenCardProvider = cliProvider.name;
+      state.tokenStatus = await getTokenStatus(cliProvider.name);
     } else {
+      tokenCardProvider = null;
       state.tokenStatus = null;
     }
   } catch (err: any) {
@@ -95,13 +106,17 @@ async function handleUpdateToken() {
   const input = document.getElementById('token-input') as HTMLInputElement | null;
   if (!input) return;
   const token = input.value.trim();
-  if (!token || !token.startsWith('sk-ant-')) return;
+  if (!token) return;
 
+  // Use the provider the token card is actually showing
+  const provider = tokenCardProvider || 'claude';
+
+  state.error = null;
   state.savingToken = true;
   render();
 
   try {
-    const result = await updateToken('claude', token);
+    const result = await updateToken(provider, token);
     if (result.ok) {
       showSuccess(`Token updated. Expires: ${formatDate(result.expired ?? null)}`);
       input.value = '';
@@ -119,7 +134,8 @@ async function handleUpdateToken() {
 
 function handleDisconnect(providerName: string) {
   disconnectProvider(providerName);
-  showSuccess(`Disconnecting ${providerName}... Check chat for status.`);
+  showSuccess(`Disconnect requested for ${providerName} — check chat for confirmation.`);
+  setTimeout(loadData, 4000);
 }
 
 function handleConnect() {
@@ -138,11 +154,132 @@ function handleConnect() {
     if (!key) { state.error = 'Please enter an API key'; render(); return; }
     connectProvider(providerId, key);
   } else {
-    connectProvider(providerId);
+    // CLI subscription — start OAuth via CLIProxyAPI or chat
+    handleOAuthConnect(providerId, def.label).catch(err => {
+      oauthConnecting = false;
+      state.error = err?.message ?? 'OAuth failed to start';
+      render();
+    });
+    return;
   }
 
   showSuccess(`Connecting ${def.label}... Check chat for auth instructions.`);
   if (keyInput) keyInput.value = '';
+}
+
+async function handleOAuthConnect(providerId: string, label: string) {
+  if (oauthConnecting) {
+    state.error = 'Authentication already in progress — cancel it first.';
+    render();
+    return;
+  }
+  oauthConnecting = true;
+  state.error = null;
+  const thisSession = ++oauthSessionId;
+  render();
+
+  // Try CLIProxyAPI's built-in OAuth endpoint first
+  const result = await startCliOAuth(providerId);
+  // Guard: user may have cancelled during the await
+  if (thisSession !== oauthSessionId || !oauthConnecting) return;
+  if (result?.url) {
+    oauthState = result.state;
+    // Validate URL scheme — CLIProxyAPI is a third-party binary
+    if (!/^https?:\/\//i.test(result.url)) {
+      oauthState = null;
+      oauthConnecting = false;
+      connectProvider(providerId);
+      showSuccess(`Connecting ${label}... Check chat for auth instructions.`);
+      render();
+      return;
+    }
+    oauthAuthUrl = result.url;
+    // Open the verification URL in a new browser tab
+    let opened = false;
+    try {
+      const w = window.open(result.url, '_blank', 'noopener,noreferrer');
+      opened = !!w;
+    } catch {
+      // popup blocked
+    }
+    if (opened) {
+      showSuccess(`OAuth started for ${label}. Complete authentication in the browser tab.`);
+    } else {
+      showSuccess(`Popup blocked — use the link in the authenticating card below.`);
+    }
+
+    // Poll for completion using setTimeout recursion (supports slow_down backoff)
+    const oauthPollStart = Date.now();
+    const OAUTH_POLL_MAX_MS = 15 * 60 * 1000;
+    let pollDelay = 3000;
+    if (oauthPollTimer) clearTimeout(oauthPollTimer);
+
+    // Use a local timer handle per session to avoid aliasing with newer sessions
+    let localTimer: ReturnType<typeof setTimeout> | null = null;
+
+    function cleanupSession() {
+      // Only clear the shared timer if it's still ours
+      if (oauthPollTimer === localTimer) oauthPollTimer = null;
+      localTimer = null;
+      oauthState = null;
+      oauthAuthUrl = null;
+      oauthConnecting = false;
+    }
+
+    function scheduleOAuthPoll() {
+      localTimer = setTimeout(async () => {
+        try {
+        if (thisSession !== oauthSessionId) return; // stale session — exit silently
+        const currentState = oauthState;
+        if (!currentState || Date.now() - oauthPollStart > OAUTH_POLL_MAX_MS) {
+          cleanupSession();
+          state.error = 'OAuth timed out. Please try again.';
+          render();
+          return;
+        }
+        const poll = await pollCliOAuth(currentState);
+        if (thisSession !== oauthSessionId) return; // superseded during await
+        if (!oauthConnecting) return; // cancelled during await
+        if (poll.status === 'ok') {
+          cleanupSession();
+          showSuccess(`${label} connected successfully! Models are now available.`);
+          await loadData();
+          tokenCardProvider = providerId; // show the just-connected provider after loadData
+          render();
+        } else if (poll.status === 'error') {
+          cleanupSession();
+          state.error = poll.message || 'OAuth failed. Try again or use the chat command.';
+          render();
+        } else {
+          // 'wait' or 'slow_down' — schedule next poll
+          if (poll.status === 'slow_down') pollDelay = Math.min(pollDelay + 5000, 30000); // RFC 8628 §3.5
+          scheduleOAuthPoll();
+        }
+        } catch (err: any) {
+          cleanupSession();
+          state.error = err?.message ?? 'OAuth polling failed unexpectedly';
+          render();
+        }
+      }, pollDelay);
+      oauthPollTimer = localTimer; // sync shared handle for cancel
+    }
+    scheduleOAuthPoll();
+  } else {
+    // Fallback: use chat command
+    oauthConnecting = false;
+    connectProvider(providerId);
+    showSuccess(`Connecting ${label}... Check chat for auth instructions.`);
+  }
+  render();
+}
+
+function handleCancelOAuth() {
+  if (oauthPollTimer) clearTimeout(oauthPollTimer);
+  oauthPollTimer = null;
+  oauthState = null;
+  oauthAuthUrl = null;
+  oauthConnecting = false;
+  render();
 }
 
 // ---------------------------------------------------------------------------
@@ -150,6 +287,9 @@ function handleConnect() {
 // ---------------------------------------------------------------------------
 
 function render() {
+  const tokenCardTitle = tokenCardProvider
+    ? tokenCardProvider.charAt(0).toUpperCase() + tokenCardProvider.slice(1) + ' OAuth Token'
+    : 'OAuth Token';
   const html = `
     <style>${CSS}</style>
     <div class="panel">
@@ -194,10 +334,10 @@ function render() {
         `}
       </div>
 
-      <!-- Token Management (shown if Claude provider connected) -->
+      <!-- Token Management (shown if a CLI subscription provider is connected) -->
       ${state.tokenStatus ? `
       <div class="card">
-        <h2 class="section-heading">Claude OAuth Token</h2>
+        <h2 class="section-heading">${escapeHtml(tokenCardTitle)}</h2>
         <div class="config-grid">
           <div class="config-row">
             <span class="config-label">Status</span>
@@ -235,15 +375,22 @@ function render() {
           </div>
         </div>
 
+        ${!state.tokenStatus?.has_refresh_token ? `
         <div class="form-card">
-          <p class="form-hint">Paste a new Claude access token to update:</p>
-          <div class="form-row">
+          <p class="form-hint" style="color: var(--fg-danger, #ef4444);">No refresh token — auto-refresh will not work. Re-connect via OAuth to get a refresh token.</p>
+        </div>
+        ` : ''}
+
+        <!-- Manual token paste (collapsed fallback) -->
+        <details class="form-card">
+          <summary class="form-hint" style="cursor: pointer;">Manual token update (fallback)</summary>
+          <div class="form-row" style="margin-top: 8px;">
             <input type="text" id="token-input" class="form-input mono" placeholder="sk-ant-oat01-..." />
             <button class="btn btn-primary" onclick="__updateToken()" ${state.savingToken ? 'disabled' : ''}>
               ${state.savingToken ? 'Updating...' : 'Update'}
             </button>
           </div>
-        </div>
+        </details>
       </div>
       ` : ''}
 
@@ -255,7 +402,7 @@ function render() {
             <div class="provider-header">
               <span class="provider-name">${escapeHtml(p.name)}</span>
               <span class="provider-type badge ${p.type === 'cli-subscription' ? 'badge-cli' : 'badge-api'}">${p.type === 'cli-subscription' ? 'CLI' : 'API'}</span>
-              <button class="btn btn-danger btn-sm" onclick="__disconnect('${escapeAttr(p.name)}')">Disconnect</button>
+              <button class="btn btn-danger btn-sm" data-disconnect="${escapeHtml(p.name)}">Disconnect</button>
             </div>
             <div class="model-list">
               ${p.models.map(m => `<span class="model-tag">${escapeHtml(m.id)}</span>`).join('')}
@@ -266,11 +413,23 @@ function render() {
         `}
       </div>
 
+      <!-- OAuth Connecting State -->
+      ${oauthConnecting ? `
+      <div class="card">
+        <h2 class="section-heading">Authenticating...</h2>
+        <p class="form-hint">Complete the authentication in the browser tab. This will update automatically.</p>
+        ${oauthAuthUrl ? `<p class="form-hint"><a href="${escapeHtml(oauthAuthUrl)}" target="_blank" rel="noopener noreferrer" style="color: var(--fg-link, #3b82f6);">Open authentication page</a></p>` : ''}
+        <div class="form-row">
+          <button class="btn btn-secondary" onclick="__cancelOAuth()">Cancel</button>
+        </div>
+      </div>
+      ` : ''}
+
       <!-- Connect Form -->
       <div class="card">
         <h2 class="section-heading">Connect Provider</h2>
         <div class="form-row">
-          <select id="provider-select" class="form-input" onchange="__onProviderChange()">
+          <select id="provider-select" class="form-input" onchange="__onProviderChange()" ${oauthConnecting ? 'disabled' : ''}>
             <option value="">Select a provider...</option>
             ${PROVIDERS.map(p => `<option value="${p.id}">${escapeHtml(p.label)}</option>`).join('')}
           </select>
@@ -280,7 +439,7 @@ function render() {
           <input type="text" id="api-key-input" class="form-input mono" placeholder="Paste your API key..." />
         </div>
         <div class="form-row">
-          <button class="btn btn-primary" onclick="__connect()">Connect</button>
+          <button class="btn btn-primary" onclick="__connect()" ${oauthConnecting ? 'disabled' : ''}>Connect</button>
         </div>
       </div>
     </div>
@@ -291,9 +450,9 @@ function render() {
   // Re-attach global handlers after render (xai.render replaces innerHTML)
   (window as any).__refresh = loadData;
   (window as any).__updateToken = handleUpdateToken;
-  (window as any).__disconnect = handleDisconnect;
   (window as any).__connect = handleConnect;
   (window as any).__onProviderChange = onProviderChange;
+  (window as any).__cancelOAuth = handleCancelOAuth;
 }
 
 function onProviderChange() {
@@ -319,10 +478,6 @@ function onProviderChange() {
 
 function escapeHtml(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-function escapeAttr(str: string): string {
-  return str.replace(/'/g, "\\'").replace(/"/g, '\\"');
 }
 
 // ---------------------------------------------------------------------------
@@ -584,8 +739,18 @@ const CSS = `
 xai.on('ready', () => {
   loadData();
 
-  // Poll every 30 seconds
+  // Poll every 30 seconds (clear previous if re-initialized)
+  if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(loadData, 30_000);
+
+  // Event delegation for disconnect buttons (registered once, not per render)
+  if (!(window as any).__cliproxyClickRegistered) {
+    (window as any).__cliproxyClickRegistered = true;
+    document.addEventListener('click', (e) => {
+      const btn = (e.target as HTMLElement).closest('[data-disconnect]') as HTMLElement | null;
+      if (btn?.dataset.disconnect) handleDisconnect(btn.dataset.disconnect);
+    });
+  }
 });
 
 // Sync with chat — refresh when cliproxy commands are used

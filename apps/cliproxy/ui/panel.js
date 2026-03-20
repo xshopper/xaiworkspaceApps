@@ -36,7 +36,9 @@
   }
   async function getTokenStatus(provider) {
     try {
-      const res = await xai.http(`${BASE}/admin/token?provider=${encodeURIComponent(provider)}`);
+      const res = await xai.http(`${BASE}/admin/token?provider=${encodeURIComponent(provider)}`, {
+        headers: { Authorization: "Bearer local-only" }
+      });
       return res.data;
     } catch {
       return null;
@@ -45,7 +47,7 @@
   async function updateToken(provider, accessToken) {
     const res = await xai.http(`${BASE}/admin/token`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Authorization: "Bearer local-only" },
       body: JSON.stringify({ provider, access_token: accessToken })
     });
     return res.data;
@@ -62,11 +64,58 @@
       xai.chat.send(`@cliproxy connect ${providerId}`);
     }
   }
-  var BASE, CLI_PROVIDERS;
+  async function startCliOAuth(provider) {
+    const endpoint = CLI_AUTH_ENDPOINTS[provider];
+    if (endpoint) {
+      try {
+        const res = await xai.http(`${BASE}${endpoint}`, {
+          headers: { Authorization: "Bearer local-only" }
+        });
+        if (res.data?.url) return res.data;
+      } catch {
+      }
+    }
+    try {
+      const res = await xai.http(
+        `${BASE}/auth-url?provider=${encodeURIComponent(provider)}`,
+        {
+          headers: { Authorization: "Bearer local-only" }
+        }
+      );
+      if (res.data?.url) return res.data;
+    } catch {
+    }
+    return null;
+  }
+  async function pollCliOAuth(state) {
+    try {
+      const res = await xai.http(
+        `${BASE}/get-auth-status?state=${encodeURIComponent(state)}`,
+        {
+          headers: { Authorization: "Bearer local-only" }
+        }
+      );
+      return res.data;
+    } catch (err) {
+      const status = err?.status ?? err?.response?.status;
+      if (status && status >= 400 && status < 500) {
+        return { status: "error", message: "OAuth session expired. Please try again." };
+      }
+      return { status: "wait", message: "Polling \u2014 waiting for authentication..." };
+    }
+  }
+  var BASE, CLI_PROVIDERS, CLI_AUTH_ENDPOINTS;
   var init_api = __esm({
     "apps/cliproxy/ui/api.ts"() {
       BASE = "http://localhost:4001";
       CLI_PROVIDERS = /* @__PURE__ */ new Set(["claude", "gemini", "codex", "qwen", "iflow"]);
+      CLI_AUTH_ENDPOINTS = {
+        claude: "/anthropic-auth-url",
+        codex: "/codex-auth-url",
+        gemini: "/gemini-auth-url",
+        qwen: "/qwen-auth-url",
+        iflow: "/iflow-auth-url"
+      };
     }
   });
 
@@ -75,10 +124,11 @@
     "apps/cliproxy/ui/panel.ts"() {
       init_api();
       var PROVIDERS = [
-        { id: "claude", label: "Claude (CLI)", type: "cli-subscription", hint: "Browser OAuth \u2014 no API key needed" },
-        { id: "gemini", label: "Gemini (CLI)", type: "cli-subscription", hint: "Browser OAuth \u2014 no API key needed" },
-        { id: "codex", label: "Codex (CLI)", type: "cli-subscription", hint: "Browser OAuth \u2014 no API key needed" },
-        { id: "qwen", label: "Qwen (CLI)", type: "cli-subscription", hint: "Browser OAuth \u2014 no API key needed" },
+        { id: "claude", label: "Claude Code", type: "cli-subscription", hint: "Browser OAuth \u2014 no API key needed" },
+        { id: "codex", label: "OpenAI Codex", type: "cli-subscription", hint: "Browser OAuth \u2014 GPT models" },
+        { id: "gemini", label: "Gemini CLI", type: "cli-subscription", hint: "Browser OAuth \u2014 no API key needed" },
+        { id: "qwen", label: "Qwen Code", type: "cli-subscription", hint: "Browser OAuth \u2014 no API key needed" },
+        { id: "iflow", label: "iFlow", type: "cli-subscription", hint: "Browser OAuth \u2014 no API key needed" },
         { id: "zai", label: "Z.ai / Zhipu", type: "api-key", hint: "Get key at z.ai" },
         { id: "grok", label: "xAI Grok", type: "api-key", hint: "Get key at console.x.ai" },
         { id: "openai", label: "OpenAI", type: "api-key", hint: "Get key at platform.openai.com" },
@@ -98,6 +148,12 @@
       };
       var successTimer = null;
       var pollTimer = null;
+      var oauthPollTimer = null;
+      var oauthState = null;
+      var oauthConnecting = false;
+      var oauthAuthUrl = null;
+      var tokenCardProvider = null;
+      var oauthSessionId = 0;
       function formatDate(iso) {
         if (!iso) return "\u2014";
         try {
@@ -113,6 +169,7 @@
           state.success = null;
           render();
         }, 6e3);
+        render();
       }
       async function loadData() {
         state.loading = true;
@@ -122,10 +179,13 @@
           const models = await getModels();
           state.status = deriveStatus(models);
           state.providers = groupProviders(models.data);
-          const claudeProvider = state.providers.find((p) => p.name === "claude");
-          if (claudeProvider) {
-            state.tokenStatus = await getTokenStatus("claude");
+          const cliProviders = state.providers.filter((p) => p.type === "cli-subscription");
+          const cliProvider = cliProviders.find((p) => p.name === "claude") ?? cliProviders[0] ?? null;
+          if (cliProvider) {
+            tokenCardProvider = cliProvider.name;
+            state.tokenStatus = await getTokenStatus(cliProvider.name);
           } else {
+            tokenCardProvider = null;
             state.tokenStatus = null;
           }
         } catch (err) {
@@ -142,11 +202,13 @@
         const input = document.getElementById("token-input");
         if (!input) return;
         const token = input.value.trim();
-        if (!token || !token.startsWith("sk-ant-")) return;
+        if (!token) return;
+        const provider = tokenCardProvider || "claude";
+        state.error = null;
         state.savingToken = true;
         render();
         try {
-          const result = await updateToken("claude", token);
+          const result = await updateToken(provider, token);
           if (result.ok) {
             showSuccess(`Token updated. Expires: ${formatDate(result.expired ?? null)}`);
             input.value = "";
@@ -163,7 +225,8 @@
       }
       function handleDisconnect(providerName) {
         disconnectProvider(providerName);
-        showSuccess(`Disconnecting ${providerName}... Check chat for status.`);
+        showSuccess(`Disconnect requested for ${providerName} \u2014 check chat for confirmation.`);
+        setTimeout(loadData, 4e3);
       }
       function handleConnect() {
         const select = document.getElementById("provider-select");
@@ -182,12 +245,115 @@
           }
           connectProvider(providerId, key);
         } else {
-          connectProvider(providerId);
+          handleOAuthConnect(providerId, def.label).catch((err) => {
+            oauthConnecting = false;
+            state.error = err?.message ?? "OAuth failed to start";
+            render();
+          });
+          return;
         }
         showSuccess(`Connecting ${def.label}... Check chat for auth instructions.`);
         if (keyInput) keyInput.value = "";
       }
+      async function handleOAuthConnect(providerId, label) {
+        if (oauthConnecting) {
+          state.error = "Authentication already in progress \u2014 cancel it first.";
+          render();
+          return;
+        }
+        oauthConnecting = true;
+        state.error = null;
+        const thisSession = ++oauthSessionId;
+        render();
+        const result = await startCliOAuth(providerId);
+        if (thisSession !== oauthSessionId || !oauthConnecting) return;
+        if (result?.url) {
+          let cleanupSession = function() {
+            if (oauthPollTimer === localTimer) oauthPollTimer = null;
+            localTimer = null;
+            oauthState = null;
+            oauthAuthUrl = null;
+            oauthConnecting = false;
+          }, scheduleOAuthPoll = function() {
+            localTimer = setTimeout(async () => {
+              try {
+                if (thisSession !== oauthSessionId) return;
+                const currentState = oauthState;
+                if (!currentState || Date.now() - oauthPollStart > OAUTH_POLL_MAX_MS) {
+                  cleanupSession();
+                  state.error = "OAuth timed out. Please try again.";
+                  render();
+                  return;
+                }
+                const poll = await pollCliOAuth(currentState);
+                if (thisSession !== oauthSessionId) return;
+                if (!oauthConnecting) return;
+                if (poll.status === "ok") {
+                  cleanupSession();
+                  showSuccess(`${label} connected successfully! Models are now available.`);
+                  await loadData();
+                  tokenCardProvider = providerId;
+                  render();
+                } else if (poll.status === "error") {
+                  cleanupSession();
+                  state.error = poll.message || "OAuth failed. Try again or use the chat command.";
+                  render();
+                } else {
+                  if (poll.status === "slow_down") pollDelay = Math.min(pollDelay + 5e3, 3e4);
+                  scheduleOAuthPoll();
+                }
+              } catch (err) {
+                cleanupSession();
+                state.error = err?.message ?? "OAuth polling failed unexpectedly";
+                render();
+              }
+            }, pollDelay);
+            oauthPollTimer = localTimer;
+          };
+          oauthState = result.state;
+          if (!/^https?:\/\//i.test(result.url)) {
+            oauthState = null;
+            oauthConnecting = false;
+            connectProvider(providerId);
+            showSuccess(`Connecting ${label}... Check chat for auth instructions.`);
+            render();
+            return;
+          }
+          oauthAuthUrl = result.url;
+          let opened = false;
+          try {
+            const w = window.open(result.url, "_blank", "noopener,noreferrer");
+            opened = !!w;
+          } catch {
+          }
+          if (opened) {
+            showSuccess(`OAuth started for ${label}. Complete authentication in the browser tab.`);
+          } else {
+            showSuccess(`Popup blocked \u2014 use the link in the authenticating card below.`);
+          }
+          const oauthPollStart = Date.now();
+          const OAUTH_POLL_MAX_MS = 15 * 60 * 1e3;
+          let pollDelay = 3e3;
+          if (oauthPollTimer) clearTimeout(oauthPollTimer);
+          let localTimer = null;
+          scheduleOAuthPoll();
+        } else {
+          oauthConnecting = false;
+          connectProvider(providerId);
+          showSuccess(`Connecting ${label}... Check chat for auth instructions.`);
+        }
+        render();
+      }
+      function handleCancelOAuth() {
+        if (oauthPollTimer) clearTimeout(oauthPollTimer);
+        oauthPollTimer = null;
+        oauthState = null;
+        oauthAuthUrl = null;
+        oauthConnecting = false;
+        render();
+      }
       function render() {
+        const tokenCardTitle = tokenCardProvider ? tokenCardProvider.charAt(0).toUpperCase() + tokenCardProvider.slice(1) + " OAuth Token" : "OAuth Token";
         const html = `
     <style>${CSS}</style>
     <div class="panel">
@@ -232,10 +398,10 @@
         `}
       </div>
 
-      <!-- Token Management (shown if Claude provider connected) -->
+      <!-- Token Management (shown if a CLI subscription provider is connected) -->
       ${state.tokenStatus ? `
       <div class="card">
-        <h2 class="section-heading">Claude OAuth Token</h2>
+        <h2 class="section-heading">${escapeHtml(tokenCardTitle)}</h2>
         <div class="config-grid">
           <div class="config-row">
             <span class="config-label">Status</span>
@@ -273,15 +439,22 @@
           </div>
         </div>
 
+        ${!state.tokenStatus?.has_refresh_token ? `
         <div class="form-card">
-          <p class="form-hint">Paste a new Claude access token to update:</p>
-          <div class="form-row">
+          <p class="form-hint" style="color: var(--fg-danger, #ef4444);">No refresh token \u2014 auto-refresh will not work. Re-connect via OAuth to get a refresh token.</p>
+        </div>
+        ` : ""}
+
+        <!-- Manual token paste (collapsed fallback) -->
+        <details class="form-card">
+          <summary class="form-hint" style="cursor: pointer;">Manual token update (fallback)</summary>
+          <div class="form-row" style="margin-top: 8px;">
             <input type="text" id="token-input" class="form-input mono" placeholder="sk-ant-oat01-..." />
             <button class="btn btn-primary" onclick="__updateToken()" ${state.savingToken ? "disabled" : ""}>
               ${state.savingToken ? "Updating..." : "Update"}
             </button>
           </div>
-        </div>
+        </details>
       </div>
       ` : ""}
 
@@ -293,7 +466,7 @@
             <div class="provider-header">
               <span class="provider-name">${escapeHtml(p.name)}</span>
               <span class="provider-type badge ${p.type === "cli-subscription" ? "badge-cli" : "badge-api"}">${p.type === "cli-subscription" ? "CLI" : "API"}</span>
-              <button class="btn btn-danger btn-sm" onclick="__disconnect('${escapeAttr(p.name)}')">Disconnect</button>
+              <button class="btn btn-danger btn-sm" data-disconnect="${escapeHtml(p.name)}">Disconnect</button>
             </div>
             <div class="model-list">
               ${p.models.map((m) => `<span class="model-tag">${escapeHtml(m.id)}</span>`).join("")}
@@ -304,11 +477,23 @@
         `}
       </div>
 
+      <!-- OAuth Connecting State -->
+      ${oauthConnecting ? `
+      <div class="card">
+        <h2 class="section-heading">Authenticating...</h2>
+        <p class="form-hint">Complete the authentication in the browser tab. This will update automatically.</p>
+        ${oauthAuthUrl ? `<p class="form-hint"><a href="${escapeHtml(oauthAuthUrl)}" target="_blank" rel="noopener noreferrer" style="color: var(--fg-link, #3b82f6);">Open authentication page</a></p>` : ""}
+        <div class="form-row">
+          <button class="btn btn-secondary" onclick="__cancelOAuth()">Cancel</button>
+        </div>
+      </div>
+      ` : ""}
+
       <!-- Connect Form -->
       <div class="card">
         <h2 class="section-heading">Connect Provider</h2>
         <div class="form-row">
-          <select id="provider-select" class="form-input" onchange="__onProviderChange()">
+          <select id="provider-select" class="form-input" onchange="__onProviderChange()" ${oauthConnecting ? "disabled" : ""}>
             <option value="">Select a provider...</option>
             ${PROVIDERS.map((p) => `<option value="${p.id}">${escapeHtml(p.label)}</option>`).join("")}
           </select>
@@ -318,7 +503,7 @@
           <input type="text" id="api-key-input" class="form-input mono" placeholder="Paste your API key..." />
         </div>
         <div class="form-row">
-          <button class="btn btn-primary" onclick="__connect()">Connect</button>
+          <button class="btn btn-primary" onclick="__connect()" ${oauthConnecting ? "disabled" : ""}>Connect</button>
         </div>
       </div>
     </div>
@@ -326,9 +511,9 @@
         xai.render(html);
         window.__refresh = loadData;
         window.__updateToken = handleUpdateToken;
-        window.__disconnect = handleDisconnect;
         window.__connect = handleConnect;
         window.__onProviderChange = onProviderChange;
+        window.__cancelOAuth = handleCancelOAuth;
       }
       function onProviderChange() {
         const select = document.getElementById("provider-select");
@@ -347,9 +532,6 @@
       }
       function escapeHtml(str) {
         return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-      }
-      function escapeAttr(str) {
-        return str.replace(/'/g, "\\'").replace(/"/g, '\\"');
       }
       var CSS = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -600,7 +782,15 @@
 `;
       xai.on("ready", () => {
         loadData();
+        if (pollTimer) clearInterval(pollTimer);
         pollTimer = setInterval(loadData, 3e4);
+        if (!window.__cliproxyClickRegistered) {
+          window.__cliproxyClickRegistered = true;
+          document.addEventListener("click", (e) => {
+            const btn = e.target.closest("[data-disconnect]");
+            if (btn?.dataset.disconnect) handleDisconnect(btn.dataset.disconnect);
+          });
+        }
       });
       xai.on("chat.message", (msg) => {
         if (msg?.text?.includes?.("@cliproxy")) {

@@ -40,7 +40,9 @@ export function groupProviders(models: Model[]): Provider[] {
 /** Get token status for a CLI subscription (e.g. Claude) */
 export async function getTokenStatus(provider: string): Promise<TokenStatus | null> {
   try {
-    const res = await xai.http<TokenStatus>(`${BASE}/admin/token?provider=${encodeURIComponent(provider)}`);
+    const res = await xai.http<TokenStatus>(`${BASE}/admin/token?provider=${encodeURIComponent(provider)}`, {
+      headers: { Authorization: 'Bearer local-only' },
+    });
     return res.data;
   } catch {
     return null;
@@ -51,7 +53,7 @@ export async function getTokenStatus(provider: string): Promise<TokenStatus | nu
 export async function updateToken(provider: string, accessToken: string): Promise<{ ok: boolean; expired?: string; error?: string }> {
   const res = await xai.http<{ ok: boolean; expired?: string; error?: string }>(`${BASE}/admin/token`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer local-only' },
     body: JSON.stringify({ provider, access_token: accessToken }),
   });
   return res.data;
@@ -70,5 +72,74 @@ export function connectProvider(providerId: string, apiKey?: string): void {
     ]);
   } else {
     xai.chat.send(`@cliproxy connect ${providerId}`);
+  }
+}
+
+// ── CLIProxyAPI OAuth (device-code flow) ────────────────────────────────
+
+/**
+ * Start OAuth device-code flow via CLIProxyAPI's built-in endpoint.
+ *
+ * CLIProxyAPI exposes provider-specific auth-url endpoints matching the
+ * `cli-proxy-api auth add {provider}` CLI commands. The endpoint naming
+ * convention is `/{provider}-auth-url` (e.g. `/anthropic-auth-url` for
+ * Claude, `/codex-auth-url` for OpenAI Codex).
+ *
+ * If the provider-specific endpoint returns 404, falls back to a generic
+ * `/auth-url?provider={name}` endpoint (supported in newer CLIProxyAPI versions).
+ * If both fail, the caller falls back to the chat command.
+ */
+const CLI_AUTH_ENDPOINTS: Record<string, string> = {
+  claude: '/anthropic-auth-url',
+  codex: '/codex-auth-url',
+  gemini: '/gemini-auth-url',
+  qwen: '/qwen-auth-url',
+  iflow: '/iflow-auth-url',
+};
+
+export async function startCliOAuth(provider: string): Promise<{ url: string; state: string } | null> {
+  // Try provider-specific endpoint first
+  const endpoint = CLI_AUTH_ENDPOINTS[provider];
+  if (endpoint) {
+    try {
+      const res = await xai.http<{ url: string; state: string }>(`${BASE}${endpoint}`, {
+        headers: { Authorization: 'Bearer local-only' },
+      });
+      if (res.data?.url) return res.data;
+    } catch {
+      // endpoint not available — try generic fallback
+    }
+  }
+
+  // Generic fallback for newer CLIProxyAPI versions or unknown providers
+  try {
+    const res = await xai.http<{ url: string; state: string }>(
+      `${BASE}/auth-url?provider=${encodeURIComponent(provider)}`, {
+        headers: { Authorization: 'Bearer local-only' },
+      });
+    if (res.data?.url) return res.data;
+  } catch {
+    // neither endpoint available
+  }
+
+  return null;
+}
+
+/** Poll CLIProxyAPI for OAuth completion */
+export async function pollCliOAuth(state: string): Promise<{ status: string; message?: string }> {
+  try {
+    const res = await xai.http<{ status: string; message?: string }>(
+      `${BASE}/get-auth-status?state=${encodeURIComponent(state)}`, {
+        headers: { Authorization: 'Bearer local-only' },
+      });
+    return res.data;
+  } catch (err: any) {
+    // 4xx = session expired or invalid state — stop polling
+    const status = err?.status ?? err?.response?.status;
+    if (status && status >= 400 && status < 500) {
+      return { status: 'error', message: 'OAuth session expired. Please try again.' };
+    }
+    // Transient network/5xx error — return 'wait' to retry
+    return { status: 'wait', message: 'Polling — waiting for authentication...' };
   }
 }

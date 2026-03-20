@@ -40,7 +40,7 @@ persona:
         cat > ~/apps/com.xshopper.cliproxy/config.yaml << 'EOF'
         host: "127.0.0.1"
         port: 4001
-        auth-dir: "."
+        auth-dir: "auths"
         api-keys:
           - "local-only"
         EOF
@@ -97,11 +97,12 @@ persona:
 
     ## Provider Quick Reference
 
-    CLI Subscriptions (browser auth — no API key needed):
+    CLI Subscriptions (browser OAuth — no API key needed):
       @cliproxy connect claude   — Claude Code subscription ($20/mo unlimited)
+      @cliproxy connect codex    — OpenAI Codex subscription (GPT models)
       @cliproxy connect gemini   — Gemini CLI subscription
-      @cliproxy connect codex    — OpenAI Codex subscription
       @cliproxy connect qwen     — Qwen Code subscription
+      @cliproxy connect iflow    — iFlow subscription
 
     API Keys (user provides their own key):
       @cliproxy connect zai      — Z.ai / Zhipu AI GLM (z.ai)
@@ -196,33 +197,66 @@ persona:
 
     ## CLI Subscription Providers
 
-    User authenticates via browser. Run the auth command, give user the URL.
-    Tokens stored in ~/apps/com.xshopper.cliproxy/auths/ and auto-refresh.
+    User authenticates via OAuth through CLIProxyAPI's built-in endpoints.
+    CLIProxyAPI handles the full flow: get auth URL, user authenticates,
+    tokens stored locally, auto-refreshes 4 hours before expiry.
 
-    ### Claude Code Subscription
+    ### Connecting a CLI Subscription (Claude, Codex, Gemini, Qwen, iFlow)
+
+    Each provider has a specific auth-url endpoint on CLIProxyAPI:
+
+    | Provider | Auth Endpoint | CLI Command |
+    |----------|--------------|-------------|
+    | Claude Code | `/anthropic-auth-url` | `cli-proxy-api auth add claude` |
+    | OpenAI Codex | `/codex-auth-url` | `cli-proxy-api auth add codex` |
+    | Gemini CLI | `/gemini-auth-url` | `cli-proxy-api auth add gemini` |
+    | Qwen Code | `/qwen-auth-url` | `cli-proxy-api auth add qwen` |
+    | iFlow | `/iflow-auth-url` | `cli-proxy-api auth add iflow` |
+
+    **Option 1: Via CLIProxyAPI HTTP API (preferred)**
+    ```bash
+    # Replace PROVIDER_ENDPOINT with the correct endpoint from the table above
+    # Example for Claude: /anthropic-auth-url
+    # Example for Codex: /codex-auth-url
+
+    # 1. Get OAuth URL from CLIProxyAPI
+    AUTH=$(curl -s "http://localhost:4001${PROVIDER_ENDPOINT}" \
+      -H "Authorization: Bearer local-only")
+    URL=$(echo "$AUTH" | jq -r '.url')
+    STATE=$(echo "$AUTH" | jq -r '.state')
+    ```
+    - Send the URL to the user as a clickable link
+    - The user opens it and authenticates in their browser
+
+    ```bash
+    # 2. Poll for completion (same for all providers)
+    for i in $(seq 1 60); do
+      STATUS=$(curl -s "http://localhost:4001/get-auth-status?state=$STATE" \
+        -H "Authorization: Bearer local-only" | jq -r '.status')
+      [ "$STATUS" = "ok" ] && break
+      [ "$STATUS" = "error" ] && break
+      sleep 5
+    done
+    ```
+
+    ```bash
+    # 3. Verify models are available and register with platform
+    sleep 2
+    curl -s http://localhost:4001/v1/models | jq '.data[].id'
+    ```
+    Then register models with the platform and update openclaw.json as usual.
+    CLIProxyAPI stores tokens in ~/apps/com.xshopper.cliproxy/auths/ and
+    auto-refreshes them 4 hours before expiry — no manual token management needed.
+
+    **Option 2: Via CLI command (fallback)**
     ```bash
     cli-proxy-api auth add claude
-    ```
-
-    ### Gemini CLI Subscription
-    ```bash
-    cli-proxy-api auth add gemini
-    ```
-
-    ### OpenAI Codex Subscription
-    ```bash
     cli-proxy-api auth add codex
-    ```
-
-    ### Qwen Code Subscription
-    ```bash
+    cli-proxy-api auth add gemini
     cli-proxy-api auth add qwen
-    ```
-
-    ### iFlow Subscription
-    ```bash
     cli-proxy-api auth add iflow
     ```
+    Give user the URL shown in output. Same auto-refresh behavior.
 
     ## Config Editing Pattern
 
@@ -291,8 +325,8 @@ help: |
   CLI subscriptions use browser OAuth (no API key needed).
   API key providers prompt you to paste your key.
 configurable: true
-startup: "test -x bin/cli-proxy-api && test -f config.yaml && nohup bin/cli-proxy-api --config config.yaml > cliproxy.log 2>&1 &"
-cleanup: "python3 -c \"import json,os; p=os.path.expanduser('~/.openclaw/openclaw.json'); cfg=json.load(open(p)); cfg.get('models',{}).get('providers',{}).pop('cliproxy',None); json.dump(cfg,open(p,'w'),indent=2)\" 2>/dev/null || true"
+startup: "systemctl --user start cliproxy 2>/dev/null || (test -x bin/cli-proxy-api && test -f config.yaml && nohup bin/cli-proxy-api --config config.yaml >> cliproxy.log 2>&1 &)"
+cleanup: "systemctl --user stop cliproxy 2>/dev/null; systemctl --user disable cliproxy 2>/dev/null; pkill -u \"$(id -u)\" -f 'cli-proxy-api --config' 2>/dev/null; python3 -c \"import json,os; p=os.path.expanduser('~/.openclaw/openclaw.json'); f=open(p); cfg=json.load(f); f.close(); cfg.get('models',{}).get('providers',{}).pop('cliproxy',None); w=open(p,'w'); json.dump(cfg,w,indent=2); w.close()\" 2>/dev/null || true"
 
 model: claude-sonnet-4-6
 modelFallback: [claude-haiku-4-5-20251001]
