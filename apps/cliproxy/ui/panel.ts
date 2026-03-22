@@ -147,7 +147,7 @@ async function handleUpdateToken() {
 
 function handleDisconnect(providerName: string) {
   const label = providerLabel(providerName);
-  if (!confirm(`Disconnect ${label}?`)) return;
+  // confirm() doesn't work in sandbox iframes (no allow-modals) — proceed directly
   disconnectProvider(providerName);
   showSuccess(`Disconnect request sent for ${label}. Refreshing...`);
   setTimeout(loadData, 4000);
@@ -200,14 +200,16 @@ async function handleOAuthConnect(providerId: string, label: string) {
   const thisSession = ++oauthSessionId;
   render();
 
-  // Try CLIProxyAPI's built-in OAuth endpoint first
+  // Start OAuth via the router backend (proxies to user's EC2 CLIProxyAPI)
   const result = await startCliOAuth(providerId);
   // Guard: user may have cancelled during the await
   if (thisSession !== oauthSessionId || !oauthConnecting) return;
-  if (result?.url) {
+  if (result?.authorize_url) {
     oauthState = result.state;
-    // Validate URL scheme — CLIProxyAPI is a third-party binary
-    if (!/^https?:\/\//i.test(result.url)) {
+    const authUrl = result.authorize_url;
+    const startedAt = result.started_at;
+    // Validate URL scheme
+    if (!/^https?:\/\//i.test(authUrl)) {
       oauthState = null;
       oauthConnecting = false;
       connectProvider(providerId);
@@ -215,19 +217,13 @@ async function handleOAuthConnect(providerId: string, label: string) {
       render();
       return;
     }
-    oauthAuthUrl = result.url;
-    // Open the verification URL in a new browser tab
-    let opened = false;
+    oauthAuthUrl = authUrl;
+    // Open the verification URL via the host bridge (handles web popup + native browser)
     try {
-      const w = window.open(result.url, '_blank', 'noopener,noreferrer');
-      opened = !!w;
-    } catch {
-      // popup blocked
-    }
-    if (opened) {
+      await xai.openUrl(authUrl);
       showSuccess(`OAuth started for ${label}. Complete authentication in the browser tab.`);
-    } else {
-      showSuccess(`Popup blocked — use the link in the authenticating card below.`);
+    } catch {
+      showSuccess(`Could not open browser — use the link in the authenticating card below.`);
     }
 
     // Poll for completion using setTimeout recursion (supports slow_down backoff)
@@ -259,7 +255,7 @@ async function handleOAuthConnect(providerId: string, label: string) {
           render();
           return;
         }
-        const poll = await pollCliOAuth(currentState);
+        const poll = await pollCliOAuth(currentState, startedAt, providerId);
         if (thisSession !== oauthSessionId) return; // superseded during await
         if (!oauthConnecting) return; // cancelled during await
         if (poll.status === 'ok') {
@@ -296,6 +292,7 @@ async function handleOAuthConnect(providerId: string, label: string) {
 }
 
 function handleCancelOAuth() {
+  ++oauthSessionId; // invalidate any in-flight poll callbacks
   if (oauthPollTimer) clearTimeout(oauthPollTimer);
   oauthPollTimer = null;
   oauthState = null;

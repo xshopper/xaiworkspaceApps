@@ -36,9 +36,7 @@
   }
   async function getTokenStatus(provider) {
     try {
-      const res = await xai.http(`${BASE}/admin/token?provider=${encodeURIComponent(provider)}`, {
-        headers: { Authorization: "Bearer local-only" }
-      });
+      const res = await xai.http(`${BASE}/admin/token?provider=${encodeURIComponent(provider)}`);
       return res.data;
     } catch {
       return null;
@@ -47,7 +45,7 @@
   async function updateToken(provider, accessToken) {
     const res = await xai.http(`${BASE}/admin/token`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer local-only" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ provider, access_token: accessToken })
     });
     return res.data;
@@ -65,57 +63,28 @@
     }
   }
   async function startCliOAuth(provider) {
-    const endpoint = CLI_AUTH_ENDPOINTS[provider];
-    if (endpoint) {
-      try {
-        const res = await xai.http(`${BASE}${endpoint}`, {
-          headers: { Authorization: "Bearer local-only" }
-        });
-        if (res.data?.url) return res.data;
-      } catch {
-      }
-    }
     try {
-      const res = await xai.http(
-        `${BASE}/auth-url?provider=${encodeURIComponent(provider)}`,
-        {
-          headers: { Authorization: "Bearer local-only" }
-        }
-      );
-      if (res.data?.url) return res.data;
+      return await xai.cliproxy.startOAuth(provider);
     } catch {
+      return null;
     }
-    return null;
   }
-  async function pollCliOAuth(state) {
+  async function pollCliOAuth(state, started_at, provider) {
     try {
-      const res = await xai.http(
-        `${BASE}/get-auth-status?state=${encodeURIComponent(state)}`,
-        {
-          headers: { Authorization: "Bearer local-only" }
-        }
-      );
-      return res.data;
+      return await xai.cliproxy.pollOAuth(state, started_at, provider);
     } catch (err) {
-      const status = err?.status ?? err?.response?.status;
-      if (status && status >= 400 && status < 500) {
-        return { status: "error", message: "OAuth session expired. Please try again." };
+      const msg = err?.message || "";
+      if (msg.includes("Authentication required") || msg.includes("403") || msg.includes("forbidden")) {
+        return { status: "error", message: msg || "OAuth session expired. Please try again." };
       }
       return { status: "wait", message: "Polling \u2014 waiting for authentication..." };
     }
   }
-  var BASE, CLI_PROVIDERS, CLI_AUTH_ENDPOINTS;
+  var BASE, CLI_PROVIDERS;
   var init_api = __esm({
     "apps/cliproxy/ui/api.ts"() {
       BASE = "http://localhost:4001";
       CLI_PROVIDERS = /* @__PURE__ */ new Set(["claude", "gemini", "codex", "qwen", "iflow"]);
-      CLI_AUTH_ENDPOINTS = {
-        claude: "/anthropic-auth-url",
-        codex: "/codex-auth-url",
-        gemini: "/gemini-auth-url",
-        qwen: "/qwen-auth-url",
-        iflow: "/iflow-auth-url"
-      };
     }
   });
 
@@ -234,7 +203,6 @@
       }
       function handleDisconnect(providerName) {
         const label = providerLabel(providerName);
-        if (!confirm(`Disconnect ${label}?`)) return;
         disconnectProvider(providerName);
         showSuccess(`Disconnect request sent for ${label}. Refreshing...`);
         setTimeout(loadData, 4e3);
@@ -286,7 +254,7 @@
         render();
         const result = await startCliOAuth(providerId);
         if (thisSession !== oauthSessionId || !oauthConnecting) return;
-        if (result?.url) {
+        if (result?.authorize_url) {
           let cleanupSession = function() {
             if (oauthPollTimer === localTimer) oauthPollTimer = null;
             localTimer = null;
@@ -304,7 +272,7 @@
                   render();
                   return;
                 }
-                const poll = await pollCliOAuth(currentState);
+                const poll = await pollCliOAuth(currentState, startedAt, providerId);
                 if (thisSession !== oauthSessionId) return;
                 if (!oauthConnecting) return;
                 if (poll.status === "ok") {
@@ -330,7 +298,9 @@
             oauthPollTimer = localTimer;
           };
           oauthState = result.state;
-          if (!/^https?:\/\//i.test(result.url)) {
+          const authUrl = result.authorize_url;
+          const startedAt = result.started_at;
+          if (!/^https?:\/\//i.test(authUrl)) {
             oauthState = null;
             oauthConnecting = false;
             connectProvider(providerId);
@@ -338,17 +308,12 @@
             render();
             return;
           }
-          oauthAuthUrl = result.url;
-          let opened = false;
+          oauthAuthUrl = authUrl;
           try {
-            const w = window.open(result.url, "_blank", "noopener,noreferrer");
-            opened = !!w;
-          } catch {
-          }
-          if (opened) {
+            await xai.openUrl(authUrl);
             showSuccess(`OAuth started for ${label}. Complete authentication in the browser tab.`);
-          } else {
-            showSuccess(`Popup blocked \u2014 use the link in the authenticating card below.`);
+          } catch {
+            showSuccess(`Could not open browser \u2014 use the link in the authenticating card below.`);
           }
           const oauthPollStart = Date.now();
           const OAUTH_POLL_MAX_MS = 15 * 60 * 1e3;
@@ -364,6 +329,7 @@
         render();
       }
       function handleCancelOAuth() {
+        ++oauthSessionId;
         if (oauthPollTimer) clearTimeout(oauthPollTimer);
         oauthPollTimer = null;
         oauthState = null;
