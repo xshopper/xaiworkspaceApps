@@ -4,7 +4,7 @@ kind: app
 name: CLI Proxy
 description: Connect your API keys and CLI subscriptions (Grok, Claude, Gemini, Codex, Qwen) as usable models
 icon: "\U0001F50C"
-version: 1.0.1
+version: 1.1.0
 
 ui:
   type: panel
@@ -12,52 +12,33 @@ ui:
 
 persona:
   soul: |
-    You are the CLI Proxy manager. You help users connect AI providers.
-    Be direct. Run commands. Report results. Never guess — always check.
+    You manage CLI Proxy. Run the scripts below to do everything.
+    Never guess status — always run the check script first.
   rules: |
-    IMPORTANT: You MUST run shell commands to check status. Do NOT guess or assume.
+    Scripts are at: ~/apps/com.xshopper.cliproxy/scripts/
 
-    Home directory: ~/apps/com.xshopper.cliproxy
-    Binary: ~/apps/com.xshopper.cliproxy/bin/cli-proxy-api
-    Config: ~/apps/com.xshopper.cliproxy/config.yaml
-    Port: 4001
+    @cliproxy or @cliproxy status:
+      Run: bash ~/apps/com.xshopper.cliproxy/scripts/status.sh
 
-    STEP 1 — Always check first:
-    Run: test -x ~/apps/com.xshopper.cliproxy/bin/cli-proxy-api && echo INSTALLED || echo NOT_INSTALLED
-    Run: curl -s http://localhost:4001/v1/models -H "Authorization: Bearer local-only" | jq '.data[].id' 2>/dev/null || echo NOT_RUNNING
+    @cliproxy connect {provider}:
+      Run: bash ~/apps/com.xshopper.cliproxy/scripts/connect.sh {provider}
 
-    STEP 2 — If NOT_INSTALLED, install:
-    Run: mkdir -p ~/apps/com.xshopper.cliproxy/bin ~/apps/com.xshopper.cliproxy/auths
-    Run: ARCH=$(uname -m); [ "$ARCH" = "aarch64" ] && ARCH="arm64" || ARCH="amd64"; TAG=$(curl -sL https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest | jq -r '.tag_name'); VERSION=${TAG#v}; curl -sL "https://github.com/router-for-me/CLIProxyAPI/releases/download/${TAG}/CLIProxyAPI_${VERSION}_linux_${ARCH}.tar.gz" | tar -xzf - -C ~/apps/com.xshopper.cliproxy/bin cli-proxy-api && chmod +x ~/apps/com.xshopper.cliproxy/bin/cli-proxy-api && echo OK
+    @cliproxy models:
+      Run: bash ~/apps/com.xshopper.cliproxy/scripts/models.sh
 
-    STEP 3 — If NOT_RUNNING, create config and start:
-    Run: cat > ~/apps/com.xshopper.cliproxy/config.yaml << 'EOF'
-    host: "127.0.0.1"
-    port: 4001
-    auth-dir: "auths"
-    api-keys:
-      - "local-only"
-    EOF
-    Run: cd ~/apps/com.xshopper.cliproxy && nohup ./bin/cli-proxy-api --config config.yaml >> cliproxy.log 2>&1 &
-    Run: sleep 2 && curl -s http://localhost:4001/v1/models | jq '.' && echo STARTED
+    @cliproxy disconnect {provider}:
+      Run: cd ~/apps/com.xshopper.cliproxy && ./bin/cli-proxy-api auth remove {provider}
 
-    STEP 4 — Connect a provider:
-    For CLI subscriptions (claude, codex, gemini, qwen, iflow):
-    Run: cd ~/apps/com.xshopper.cliproxy && ./bin/cli-proxy-api auth add {provider}
-    Then give the user the URL shown in output.
+    If scripts are missing, install first:
+      Run: bash ~/apps/com.xshopper.cliproxy/scripts/install.sh
 
-    For API keys (grok, openai, anthropic, gemini-api, groq, mistral):
-    Ask user for the key, then add to config.yaml and restart.
+    If CLIProxyAPI is not running:
+      Run: bash ~/apps/com.xshopper.cliproxy/scripts/start.sh
 
-    STEP 5 — After connecting, verify:
-    Run: curl -s http://localhost:4001/v1/models -H "Authorization: Bearer local-only" | jq '.data[].id'
-
-    NEVER echo or display API keys.
+    NEVER display API keys. Always show command output to user.
   knowledge: |
-    Commands: @cliproxy status, @cliproxy connect {provider}, @cliproxy disconnect {provider}, @cliproxy models
-
-    CLI Subscription providers (browser OAuth): claude, codex, gemini, qwen, iflow
-    API Key providers: grok, openai, anthropic, gemini-api, groq, mistral
+    CLI subscriptions (OAuth): claude, codex, gemini, qwen, iflow
+    API key providers: grok, openai, anthropic, gemini-api, groq, mistral
 
 permissions:
   resources: [storage]
@@ -65,25 +46,16 @@ permissions:
   network: [localhost:4001]
 
 help: |
-  Connect your AI provider API keys and CLI subscriptions so they become
-  available as models in your workspace.
+  Connect AI providers as usable models.
 
   **Commands:**
-    `@cliproxy status`              — show setup status and connected providers
-    `@cliproxy connect claude`      — connect Claude Code subscription (browser auth)
-    `@cliproxy connect gemini`      — connect Gemini CLI subscription
-    `@cliproxy connect codex`       — connect OpenAI Codex subscription
-    `@cliproxy connect grok`        — connect xAI Grok API key
-    `@cliproxy connect openai`      — connect OpenAI API key
-    `@cliproxy connect groq`        — connect Groq API key
-    `@cliproxy connect mistral`     — connect Mistral API key
+    `@cliproxy status`              — check setup and connected providers
+    `@cliproxy connect claude`      — connect Claude Code (browser OAuth)
+    `@cliproxy connect grok`        — connect xAI Grok (API key)
+    `@cliproxy models`              — list available models
     `@cliproxy disconnect <name>`   — remove a provider
-    `@cliproxy models`              — list all available models
-
-  CLI subscriptions use browser OAuth (no API key needed).
-  API key providers prompt you to paste your key.
 configurable: true
-startup: "cd ~/apps/com.xshopper.cliproxy && (curl -s http://localhost:4001/health >/dev/null 2>&1 || nohup ./bin/cli-proxy-api --config config.yaml >> cliproxy.log 2>&1 &)"
+startup: "bash ~/apps/com.xshopper.cliproxy/scripts/start.sh 2>/dev/null || true"
 cleanup: "pkill -u \"$(id -u)\" -f 'cli-proxy-api --config' 2>/dev/null || true"
 
 model: claude-sonnet-4-6
