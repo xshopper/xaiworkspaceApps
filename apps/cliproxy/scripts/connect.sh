@@ -17,7 +17,7 @@ if [ -z "$PROVIDER" ]; then
 fi
 
 # Ensure running
-if ! curl -sf http://localhost:4001/health >/dev/null 2>&1; then
+if ! curl -sf http://localhost:4001/v1/models -H "Authorization: Bearer local-only" >/dev/null 2>&1; then
   echo "CLIProxyAPI not running. Starting..."
   bash "${APP_DIR}/scripts/start.sh"
 fi

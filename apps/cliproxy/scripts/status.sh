@@ -14,7 +14,7 @@ else
 fi
 
 # Service
-if curl -sf http://localhost:4001/health -H "Authorization: Bearer local-only" >/dev/null 2>&1; then
+if curl -sf http://localhost:4001/v1/models -H "Authorization: Bearer local-only" >/dev/null 2>&1; then
   echo "Service: RUNNING on port 4001"
 else
   echo "Service: NOT RUNNING (run: ~/apps/com.xshopper.cliproxy/scripts/start.sh)"
