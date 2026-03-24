@@ -21,7 +21,7 @@ fi
 
 if [ ! -f "${APP_DIR}/config.yaml" ]; then
   cat > "${APP_DIR}/config.yaml" << 'EOF'
-host: "127.0.0.1"
+host: "0.0.0.0"
 port: 4001
 auth-dir: "auths"
 api-keys:

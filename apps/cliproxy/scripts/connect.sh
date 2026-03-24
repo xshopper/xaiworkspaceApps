@@ -4,6 +4,7 @@
 set -euo pipefail
 APP_DIR="${HOME}/apps/com.xshopper.cliproxy"
 PROVIDER="${1:-}"
+ROUTER_URL="${ROUTER_URL:-http://10.14.176.1:8080}"
 
 if [ -z "$PROVIDER" ]; then
   echo "Usage: connect.sh <provider>"
@@ -22,16 +23,61 @@ if ! curl -sf http://localhost:4001/v1/models -H "Authorization: Bearer local-on
   bash "${APP_DIR}/scripts/start.sh"
 fi
 
-# CLI subscription providers — use built-in OAuth
+# CLI subscription providers — get auth URL from CLIProxyAPI, show to user
 CLI_PROVIDERS="claude codex gemini qwen iflow"
 if echo "$CLI_PROVIDERS" | grep -qw "$PROVIDER"; then
-  echo "Starting OAuth for ${PROVIDER}..."
+  # Map provider to CLIProxyAPI auth endpoint
+  case "$PROVIDER" in
+    claude) ENDPOINT="/anthropic-auth-url" ;;
+    codex)  ENDPOINT="/codex-auth-url" ;;
+    gemini) ENDPOINT="/gemini-auth-url" ;;
+    qwen)   ENDPOINT="/qwen-auth-url" ;;
+    iflow)  ENDPOINT="/iflow-auth-url" ;;
+  esac
+
+  echo "Getting OAuth URL for ${PROVIDER}..."
+  AUTH=$(curl -sf "http://localhost:4001${ENDPOINT}" -H "Authorization: Bearer local-only" 2>&1)
+  URL=$(echo "$AUTH" | jq -r '.url // empty')
+  STATE=$(echo "$AUTH" | jq -r '.state // empty')
+
+  if [ -z "$URL" ]; then
+    echo "ERROR: Could not get OAuth URL. CLIProxyAPI response:"
+    echo "$AUTH"
+    exit 1
+  fi
+
   echo ""
-  echo "NOTE: The xAI Workspace Chrome addon handles the OAuth callback automatically."
+  echo "Open this link to authenticate:"
+  echo "$URL"
+  echo ""
+  echo "The xAI Workspace Chrome addon will handle the callback automatically."
   echo "If you don't have it, install 'xAI Workspace OAuth Bridge' from the Chrome Web Store."
   echo ""
-  cd "${APP_DIR}" && ./bin/cli-proxy-api auth add "$PROVIDER"
-  exit $?
+  echo "Waiting for authentication..."
+
+  # Poll via router (picks up Chrome addon callbacks from DB and delivers to CLIProxyAPI)
+  API_KEY="${ANTHROPIC_API_KEY:-local-only}"
+  for i in $(seq 1 120); do
+    STATUS=$(curl -sf "${ROUTER_URL}/api/cliproxy/oauth/poll?state=${STATE}&provider=${PROVIDER}" \
+      -H "Authorization: Bearer ${API_KEY}" 2>/dev/null | jq -r '.status // "wait"')
+    if [ "$STATUS" = "ok" ]; then
+      echo ""
+      echo "✅ ${PROVIDER} connected successfully!"
+      echo ""
+      echo "Available models:"
+      curl -sf http://localhost:4001/v1/models -H "Authorization: Bearer local-only" | jq -r '.data[].id'
+      exit 0
+    fi
+    if [ "$STATUS" = "error" ]; then
+      echo ""
+      echo "❌ Authentication failed. Please try again."
+      exit 1
+    fi
+    sleep 3
+  done
+  echo ""
+  echo "⏰ Timed out waiting for authentication. Please try again."
+  exit 1
 fi
 
 # API key providers — need key as second argument or prompt
