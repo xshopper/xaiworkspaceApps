@@ -2,6 +2,7 @@
 # Install CLIProxyAPI binary + default config
 set -euo pipefail
 APP_DIR="${HOME}/apps/com.xshopper.cliproxy"
+FALLBACK_VERSION="6.9.1"
 
 mkdir -p "${APP_DIR}/bin" "${APP_DIR}/auths"
 
@@ -11,11 +12,27 @@ else
   echo "Downloading CLIProxyAPI..."
   ARCH=$(uname -m)
   [ "$ARCH" = "aarch64" ] && ARCH="arm64" || ARCH="amd64"
-  TAG=$(curl -sL https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest | jq -r '.tag_name')
+
+  # Use GitHub token if available (avoids rate limits)
+  AUTH_HEADER=""
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    AUTH_HEADER="-H \"Authorization: Bearer ${GITHUB_TOKEN}\""
+  fi
+
+  # Get latest version from GitHub API (with auth if available)
+  TAG=$(eval curl -sL ${AUTH_HEADER} https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest | jq -r '.tag_name // empty')
+  if [ -z "$TAG" ]; then
+    echo "GitHub API unavailable, using fallback version v${FALLBACK_VERSION}"
+    TAG="v${FALLBACK_VERSION}"
+  fi
   VERSION=${TAG#v}
-  curl -sL "https://github.com/router-for-me/CLIProxyAPI/releases/download/${TAG}/CLIProxyAPI_${VERSION}_linux_${ARCH}.tar.gz" \
-    | tar -xzf - -C "${APP_DIR}/bin" cli-proxy-api
+
+  echo "Installing CLIProxyAPI v${VERSION} (${ARCH})..."
+  curl -sfL "https://github.com/router-for-me/CLIProxyAPI/releases/download/${TAG}/CLIProxyAPI_${VERSION}_linux_${ARCH}.tar.gz" \
+    -o /tmp/cliproxy.tar.gz
+  tar -xzf /tmp/cliproxy.tar.gz -C "${APP_DIR}/bin" cli-proxy-api
   chmod +x "${APP_DIR}/bin/cli-proxy-api"
+  rm -f /tmp/cliproxy.tar.gz
   echo "Installed CLIProxyAPI ${VERSION}"
 fi
 
