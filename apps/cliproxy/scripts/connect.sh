@@ -26,6 +26,10 @@ fi
 CLI_PROVIDERS="claude codex gemini qwen iflow"
 if echo "$CLI_PROVIDERS" | grep -qw "$PROVIDER"; then
   echo "Starting OAuth for ${PROVIDER}..."
+  echo ""
+  echo "NOTE: The xAI Workspace Chrome addon handles the OAuth callback automatically."
+  echo "If you don't have it, install 'xAI Workspace OAuth Bridge' from the Chrome Web Store."
+  echo ""
   cd "${APP_DIR}" && ./bin/cli-proxy-api auth add "$PROVIDER"
   exit $?
 fi

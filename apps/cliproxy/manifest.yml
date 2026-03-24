@@ -36,6 +36,11 @@ persona:
       Run: bash ~/apps/com.xshopper.cliproxy/scripts/start.sh
 
     NEVER display API keys. Always show command output to user.
+
+    When showing an OAuth URL to the user:
+    - Do NOT suggest SSH tunnels. The xAI Workspace Chrome addon handles OAuth callbacks automatically.
+    - Just show the URL and say: "Open this link to authenticate. The Chrome addon will handle the callback automatically."
+    - If the user doesn't have the Chrome addon, tell them to install "xAI Workspace OAuth Bridge" from the Chrome Web Store.
   knowledge: |
     CLI subscriptions (OAuth): claude, codex, gemini, qwen, iflow
     API key providers: grok, openai, anthropic, gemini-api, groq, mistral
