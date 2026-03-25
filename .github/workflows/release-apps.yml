@@ -20,7 +20,7 @@ jobs:
         run: |
           BEFORE="${{ github.event.before }}"
           if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
-            BEFORE=$(git rev-list --max-parents=0 HEAD)
+            BEFORE=$(git rev-list --max-parents=0 HEAD | head -1)
           fi
           CHANGED=$(git diff --name-only "$BEFORE" "${{ github.sha }}" -- apps/ | cut -d/ -f2 | sort -u)
           echo "apps=$CHANGED" >> $GITHUB_OUTPUT
