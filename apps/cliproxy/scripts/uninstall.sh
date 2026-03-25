@@ -9,7 +9,7 @@ API_KEY="${ANTHROPIC_API_KEY:-local-only}"
 if [ -n "$ROUTER_URL" ] && [ "$ROUTER_URL" != "local-only" ]; then
   echo "Unregistering models from platform..."
   MODELS=$(curl -sf http://localhost:4001/v1/models -H "Authorization: Bearer local-only" 2>/dev/null \
-    | jq '[.data[] | {name: .id, provider: "cliproxy"}]' 2>/dev/null || echo '[]')
+    | jq '[.data[].id]' 2>/dev/null || echo '[]')
   if [ "$MODELS" != "[]" ]; then
     curl -sf -X POST "${ROUTER_URL}/api/models/unregister" \
       -H "Authorization: Bearer ${API_KEY}" \

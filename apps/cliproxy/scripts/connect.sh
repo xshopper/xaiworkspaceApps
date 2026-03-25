@@ -88,10 +88,13 @@ if echo "$CLI_PROVIDERS" | grep -qw "$PROVIDER"; then
             -H "Authorization: Bearer ${API_KEY}" \
             -H "Content-Type: application/json" \
             -d "{\"models\": ${MODELS}, \"port\": 4001, \"registeredBy\": \"cliproxy\"}" 2>/dev/null)
-          if echo "$REG_RESULT" | jq -e '.registered' >/dev/null 2>&1; then
-            REG_COUNT=$(echo "$REG_RESULT" | jq '.registered')
+          if echo "$REG_RESULT" | jq -e '.ok' >/dev/null 2>&1; then
+            REG_COUNT=$(echo "$REG_RESULT" | jq '.models | length')
             echo ""
             echo "📋 Registered ${REG_COUNT} model(s) with the platform. Type /models to switch."
+          else
+            echo ""
+            echo "⚠️ Model registration failed: $(echo "$REG_RESULT" | head -c 200)"
           fi
         fi
 
