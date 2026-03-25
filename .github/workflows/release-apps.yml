@@ -13,12 +13,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
       - name: Detect changed apps
         id: changes
         run: |
-          CHANGED=$(git diff --name-only HEAD~1 HEAD -- apps/ | cut -d/ -f2 | sort -u)
+          BEFORE="${{ github.event.before }}"
+          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            BEFORE=$(git rev-list --max-parents=0 HEAD)
+          fi
+          CHANGED=$(git diff --name-only "$BEFORE" "${{ github.sha }}" -- apps/ | cut -d/ -f2 | sort -u)
           echo "apps=$CHANGED" >> $GITHUB_OUTPUT
           echo "Changed apps: $CHANGED"
 
