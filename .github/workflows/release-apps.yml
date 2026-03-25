@@ -1,0 +1,56 @@
+name: Release Apps
+on:
+  push:
+    branches: [main]
+    paths: ['apps/**']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed apps
+        id: changes
+        run: |
+          CHANGED=$(git diff --name-only HEAD~1 HEAD -- apps/ | cut -d/ -f2 | sort -u)
+          echo "apps=$CHANGED" >> $GITHUB_OUTPUT
+          echo "Changed apps: $CHANGED"
+
+      - name: Build and release each changed app
+        run: |
+          for APP in ${{ steps.changes.outputs.apps }}; do
+            APP_DIR="apps/$APP"
+            [ -f "$APP_DIR/manifest.yml" ] || continue
+
+            VERSION=$(grep '^version:' "$APP_DIR/manifest.yml" | awk '{print $2}' | tr -d '"' | tr -d "'")
+            [ -z "$VERSION" ] && VERSION="0.1.0"
+            TAG="${APP}-v${VERSION}"
+
+            echo "📦 Building ${APP} v${VERSION}..."
+
+            # Zip the app directory (files at root, not nested under apps/slug/)
+            (cd "$APP_DIR" && zip -r "/tmp/${APP}-${VERSION}.zip" . -x "*.git*")
+
+            # Create or update release
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              echo "Release $TAG exists — updating asset"
+              gh release upload "$TAG" "/tmp/${APP}-${VERSION}.zip#${APP}-${VERSION}.zip" --clobber
+            else
+              echo "Creating release $TAG"
+              gh release create "$TAG" \
+                "/tmp/${APP}-${VERSION}.zip#${APP}-${VERSION}.zip" \
+                --title "@${APP} v${VERSION}" \
+                --notes "Auto-release from push to main" \
+                --latest=false
+            fi
+
+            echo "✅ Released: https://github.com/${{ github.repository }}/releases/download/${TAG}/${APP}-${VERSION}.zip"
+          done
+        env:
+          GH_TOKEN: ${{ github.token }}
