@@ -69,3 +69,4 @@ cleanup: "pkill -u \"$(id -u)\" -f 'cli-proxy-api --config' 2>/dev/null || true"
 model: claude-sonnet-4-6
 modelFallback: [claude-haiku-4-5-20251001, ollama/mistral-small:24b]
 sandbox: relaxed
+# v1.1.0
