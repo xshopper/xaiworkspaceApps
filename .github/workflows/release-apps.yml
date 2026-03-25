@@ -38,8 +38,28 @@ jobs:
 
             echo "📦 Building ${APP} v${VERSION}..."
 
+            # Bundle dependencies: if the app has an install.sh that references
+            # external binaries, download them and include in the zip
+            if grep -q "CLIProxyAPI" "$APP_DIR/scripts/install.sh" 2>/dev/null; then
+              echo "  Bundling CLIProxyAPI binary..."
+              mkdir -p "$APP_DIR/bin"
+              CLIPROXY_TAG=$(curl -sL https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest | jq -r '.tag_name')
+              CLIPROXY_VERSION=${CLIPROXY_TAG#v}
+              for ARCH in amd64 arm64; do
+                curl -sfL "https://github.com/router-for-me/CLIProxyAPI/releases/download/${CLIPROXY_TAG}/CLIProxyAPI_${CLIPROXY_VERSION}_linux_${ARCH}.tar.gz" \
+                  -o "/tmp/cliproxy-${ARCH}.tar.gz"
+                mkdir -p "$APP_DIR/bin/${ARCH}"
+                tar -xzf "/tmp/cliproxy-${ARCH}.tar.gz" -C "$APP_DIR/bin/${ARCH}" cli-proxy-api
+                rm -f "/tmp/cliproxy-${ARCH}.tar.gz"
+              done
+              echo "  Bundled CLIProxyAPI ${CLIPROXY_VERSION} (amd64 + arm64)"
+            fi
+
             # Zip the app directory (files at root, not nested under apps/slug/)
             (cd "$APP_DIR" && zip -r "/tmp/${APP}-${VERSION}.zip" . -x "*.git*")
+
+            # Clean up bundled binaries from source tree (don't commit them)
+            rm -rf "$APP_DIR/bin/amd64" "$APP_DIR/bin/arm64"
 
             # Create or update release
             if gh release view "$TAG" >/dev/null 2>&1; then
@@ -50,7 +70,7 @@ jobs:
               gh release create "$TAG" \
                 "/tmp/${APP}-${VERSION}.zip#${APP}-${VERSION}.zip" \
                 --title "@${APP} v${VERSION}" \
-                --notes "Auto-release from push to main" \
+                --notes "Auto-release from push to main (includes CLIProxyAPI ${CLIPROXY_VERSION:-n/a})" \
                 --latest=false
             fi
 
