@@ -29,6 +29,9 @@ persona:
     @cliproxy disconnect {provider}:
       Run: cd ~/apps/com.xshopper.cliproxy && ./bin/cli-proxy-api auth remove {provider}
 
+    @cliproxy uninstall:
+      Run: bash ~/apps/com.xshopper.cliproxy/scripts/uninstall.sh
+
     If scripts are missing, install first:
       Run: bash ~/apps/com.xshopper.cliproxy/scripts/install.sh
 
