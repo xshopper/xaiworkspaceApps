@@ -4,7 +4,6 @@
 set -euo pipefail
 APP_DIR="${HOME}/apps/com.xshopper.cliproxy"
 PROVIDER="${1:-}"
-ROUTER_URL="${ROUTER_URL:-http://10.14.176.1:8080}"
 
 if [ -z "$PROVIDER" ]; then
   echo "Usage: connect.sh <provider>"
@@ -23,26 +22,38 @@ if ! curl -sf http://localhost:4001/v1/models -H "Authorization: Bearer local-on
   bash "${APP_DIR}/scripts/start.sh"
 fi
 
-# CLI subscription providers — get auth URL from CLIProxyAPI, show to user
+# CLI subscription providers
 CLI_PROVIDERS="claude codex gemini qwen iflow"
 if echo "$CLI_PROVIDERS" | grep -qw "$PROVIDER"; then
-  # Map provider to CLIProxyAPI auth endpoint
+  # Map provider to CLI login flag
   case "$PROVIDER" in
-    claude) ENDPOINT="/anthropic-auth-url" ;;
-    codex)  ENDPOINT="/codex-auth-url" ;;
-    gemini) ENDPOINT="/gemini-auth-url" ;;
-    qwen)   ENDPOINT="/qwen-auth-url" ;;
-    iflow)  ENDPOINT="/iflow-auth-url" ;;
+    claude) LOGIN_FLAG="--claude-login" ;;
+    codex)  LOGIN_FLAG="--codex-login" ;;
+    gemini) LOGIN_FLAG="--login" ;;
+    qwen)   LOGIN_FLAG="--qwen-login" ;;
+    iflow)  LOGIN_FLAG="--iflow-login" ;;
   esac
 
-  echo "Getting OAuth URL for ${PROVIDER}..."
-  AUTH=$(curl -sf "http://localhost:4001${ENDPOINT}" -H "Authorization: Bearer local-only" 2>&1)
-  URL=$(echo "$AUTH" | jq -r '.url // empty')
-  STATE=$(echo "$AUTH" | jq -r '.state // empty')
+  # Count models before connecting
+  BEFORE=$(curl -sf http://localhost:4001/v1/models -H "Authorization: Bearer local-only" 2>/dev/null | jq '.data | length' 2>/dev/null || echo 0)
+
+  # Run CLI login in background — captures URL output, waits for callback
+  LOG_FILE="/tmp/cliproxy-oauth-${PROVIDER}.log"
+  cd "${APP_DIR}" && ./bin/cli-proxy-api ${LOGIN_FLAG} --no-browser --config config.yaml > "${LOG_FILE}" 2>&1 &
+  LOGIN_PID=$!
+
+  # Wait for the auth URL to appear in the log (max 10s)
+  URL=""
+  for i in $(seq 1 20); do
+    sleep 0.5
+    URL=$(grep -oE 'https://[^ ]+' "${LOG_FILE}" 2>/dev/null | head -1 || true)
+    [ -n "$URL" ] && break
+  done
 
   if [ -z "$URL" ]; then
-    echo "ERROR: Could not get OAuth URL. CLIProxyAPI response:"
-    echo "$AUTH"
+    echo "ERROR: Could not get OAuth URL. Log:"
+    cat "${LOG_FILE}" 2>/dev/null
+    kill $LOGIN_PID 2>/dev/null || true
     exit 1
   fi
 
@@ -51,30 +62,38 @@ if echo "$CLI_PROVIDERS" | grep -qw "$PROVIDER"; then
   echo "$URL"
   echo ""
   echo "The xAI Workspace Chrome addon will handle the callback automatically."
-  echo "If you don't have it, install 'xAI Workspace OAuth Bridge' from the Chrome Web Store."
   echo ""
   echo "Waiting for authentication..."
 
-  # Poll via router (picks up Chrome addon callbacks from DB and delivers to CLIProxyAPI)
-  API_KEY="${ANTHROPIC_API_KEY:-local-only}"
+  # Poll for new models to appear (indicates successful auth)
   for i in $(seq 1 120); do
-    STATUS=$(curl -sf "${ROUTER_URL}/api/cliproxy/oauth/poll?state=${STATE}&provider=${PROVIDER}" \
-      -H "Authorization: Bearer ${API_KEY}" 2>/dev/null | jq -r '.status // "wait"')
-    if [ "$STATUS" = "ok" ]; then
-      echo ""
-      echo "✅ ${PROVIDER} connected successfully!"
-      echo ""
-      echo "Available models:"
-      curl -sf http://localhost:4001/v1/models -H "Authorization: Bearer local-only" | jq -r '.data[].id'
-      exit 0
-    fi
-    if [ "$STATUS" = "error" ]; then
-      echo ""
-      echo "❌ Authentication failed. Please try again."
-      exit 1
+    # Check if login process completed
+    if ! kill -0 $LOGIN_PID 2>/dev/null; then
+      # Process exited — check if models increased
+      AFTER=$(curl -sf http://localhost:4001/v1/models -H "Authorization: Bearer local-only" 2>/dev/null | jq '.data | length' 2>/dev/null || echo 0)
+      if [ "$AFTER" -gt "$BEFORE" ]; then
+        echo ""
+        echo "✅ ${PROVIDER} connected successfully!"
+        echo ""
+        echo "Available models:"
+        curl -sf http://localhost:4001/v1/models -H "Authorization: Bearer local-only" | jq -r '.data[].id'
+        rm -f "${LOG_FILE}"
+        exit 0
+      else
+        echo ""
+        echo "❌ Authentication completed but no new models appeared."
+        echo "Log:"
+        cat "${LOG_FILE}" 2>/dev/null
+        rm -f "${LOG_FILE}"
+        exit 1
+      fi
     fi
     sleep 3
   done
+
+  # Timeout — kill the background process
+  kill $LOGIN_PID 2>/dev/null || true
+  rm -f "${LOG_FILE}"
   echo ""
   echo "⏰ Timed out waiting for authentication. Please try again."
   exit 1
