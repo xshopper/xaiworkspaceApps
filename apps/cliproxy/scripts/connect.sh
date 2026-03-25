@@ -77,6 +77,24 @@ if echo "$CLI_PROVIDERS" | grep -qw "$PROVIDER"; then
         echo ""
         echo "Available models:"
         curl -sf http://localhost:4001/v1/models -H "Authorization: Bearer local-only" | jq -r '.data[].id'
+
+        # Register models with the platform so they appear in /models
+        ROUTER_URL="${ROUTER_URL:-${ANTHROPIC_BASE_URL%/v1}}"
+        API_KEY="${ANTHROPIC_API_KEY:-local-only}"
+        if [ -n "$ROUTER_URL" ] && [ "$ROUTER_URL" != "local-only" ]; then
+          MODELS=$(curl -sf http://localhost:4001/v1/models -H "Authorization: Bearer local-only" \
+            | jq '[.data[] | {name: .id, provider: "cliproxy"}]')
+          REG_RESULT=$(curl -sf -X POST "${ROUTER_URL}/api/models/register" \
+            -H "Authorization: Bearer ${API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "{\"models\": ${MODELS}, \"port\": 4001, \"registeredBy\": \"cliproxy\"}" 2>/dev/null)
+          if echo "$REG_RESULT" | jq -e '.registered' >/dev/null 2>&1; then
+            REG_COUNT=$(echo "$REG_RESULT" | jq '.registered')
+            echo ""
+            echo "📋 Registered ${REG_COUNT} model(s) with the platform. Type /models to switch."
+          fi
+        fi
+
         rm -f "${LOG_FILE}"
         exit 0
       else
