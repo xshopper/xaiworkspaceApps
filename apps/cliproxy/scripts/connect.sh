@@ -37,6 +37,10 @@ if echo "$CLI_PROVIDERS" | grep -qw "$PROVIDER"; then
   # Count models before connecting
   BEFORE=$(curl -sf http://localhost:4001/v1/models -H "Authorization: Bearer local-only" 2>/dev/null | jq '.data | length' 2>/dev/null || echo 0)
 
+  # Kill any previous orphaned login processes (leftover from timed-out OAuth attempts)
+  pkill -f "cli-proxy-api.*-login" 2>/dev/null || true
+  sleep 0.5
+
   # Run CLI login in background — captures URL output, waits for callback
   LOG_FILE="/tmp/cliproxy-oauth-${PROVIDER}.log"
   cd "${APP_DIR}" && ./bin/cli-proxy-api ${LOGIN_FLAG} --no-browser --config config.yaml > "${LOG_FILE}" 2>&1 &

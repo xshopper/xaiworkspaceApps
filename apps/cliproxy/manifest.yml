@@ -6,6 +6,13 @@ description: Connect your API keys and CLI subscriptions (Grok, Claude, Gemini, 
 icon: "\U0001F50C"
 version: 1.1.0
 
+commands:
+  status: "bash scripts/status.sh"
+  connect: "bash scripts/connect.sh {args}"
+  models: "bash scripts/models.sh"
+  disconnect: "./bin/cli-proxy-api auth remove {args}"
+  uninstall: "bash scripts/uninstall.sh"
+
 ui:
   type: panel
   title: CLI Proxy
@@ -63,7 +70,7 @@ help: |
     `@cliproxy models`              — list available models
     `@cliproxy disconnect <name>`   — remove a provider
 configurable: true
-startup: "bash ~/apps/com.xshopper.cliproxy/scripts/start.sh 2>/dev/null || true"
+startup: "cd ~/apps/com.xshopper.cliproxy && ./bin/cli-proxy-api --config config.yaml"
 cleanup: "pkill -u \"$(id -u)\" -f 'cli-proxy-api --config' 2>/dev/null || true"
 
 model: claude-sonnet-4-6
