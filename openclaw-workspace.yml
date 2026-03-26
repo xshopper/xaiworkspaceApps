@@ -2,6 +2,7 @@
 # Each path contains a manifest.yml defining an app, agent, skill, or tool.
 
 apps:
+  - path: apps/openclaw
   - path: apps/email-manager
   - path: apps/expense-tracker
   - path: apps/code-reviewer
