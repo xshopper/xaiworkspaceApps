@@ -26,11 +26,8 @@ sleep 1
 echo "Removing app directory..."
 rm -rf "${APP_DIR}"
 
-echo "Removing systemd service (if any)..."
-export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-systemctl --user stop cliproxy 2>/dev/null || true
-systemctl --user disable cliproxy 2>/dev/null || true
-rm -f ~/.config/systemd/user/cliproxy.service
-systemctl --user daemon-reload 2>/dev/null || true
+echo "Removing pm2 process (if any)..."
+pm2 delete cliproxy 2>/dev/null || true
+pm2 save 2>/dev/null || true
 
 echo "✅ CLIProxy uninstalled"

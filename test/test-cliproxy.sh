@@ -52,7 +52,7 @@ fi
 # ============================================================================
 info ""
 info "=== Phase 2: Service Setup ==="
-# Expected: After install, CLIProxyAPI runs as user systemd service on port 4001
+# Expected: After install, CLIProxyAPI runs as pm2 process on port 4001
 # ============================================================================
 
 if command -v cli-proxy-api &>/dev/null || [ -x "$APP_DIR/bin/cli-proxy-api" ]; then
@@ -66,8 +66,8 @@ assert "config directory exists" "$([ -d "$APP_DIR" ] && echo true || echo false
 assert "config.yaml exists" "$([ -f "$APP_DIR/config.yaml" ] && echo true || echo false)"
 assert "auths directory exists" "$([ -d "$APP_DIR/auths" ] && echo true || echo false)"
 
-# Test: systemd service
-if systemctl --user is-active cliproxy &>/dev/null; then
+# Test: pm2 process
+if pm2 describe cliproxy &>/dev/null; then
   assert "cliproxy service is running" "true"
 else
   assert "cliproxy service is running" "false"
