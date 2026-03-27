@@ -9,6 +9,7 @@
   "scripts": {
     "test": "jest --runInBand",
     "test:smoke": "jest --runInBand e2e/smoke.spec.ts",
+    "test:openclaw": "jest --runInBand e2e/openclaw.spec.ts",
     "build:cliproxy": "esbuild apps/cliproxy/ui/panel.ts --bundle --format=iife --outfile=apps/cliproxy/ui/panel.js"
   },
   "repository": {
