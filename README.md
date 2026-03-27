@@ -26,6 +26,7 @@ Or by slug (if already published to the registry):
 
 | App | Kind | Identifier | Description |
 |-----|------|-----------|-------------|
+| [@openclaw](apps/openclaw) | App | `com.xshopper.openclaw` | Core gateway + WS bridge — manages all pm2 processes (default installed) |
 | [@cliproxy](apps/cliproxy) | App | `com.xshopper.cliproxy` | CLI proxy — connect API keys for Grok, Claude, Gemini, OpenAI, etc. |
 | [@email-manager](apps/email-manager) | App | `com.xshopper.email-manager` | Watches inbox, archives junk, summarizes important emails |
 | [@expense-tracker](apps/expense-tracker) | App | `com.xshopper.expense-tracker` | Track expenses from receipts, invoices, and statements |
