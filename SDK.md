@@ -89,7 +89,7 @@ These fields apply to all five kinds.
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `slug` | string | Yes | — | Unique identifier. Kebab-case, 3–100 characters. Pattern: `/^[a-z0-9][a-z0-9-]{1,98}[a-z0-9]$/` |
-| `kind` | string | Yes | — | One of: `app`, `agent`, `skill`, `tool`, `plugin` |
+| `kind` | string | Yes | — | One of: `app`, `agent`, `skill`, `tool`, `plugin`, `mcp` |
 | `name` | string | Yes | — | Human-readable display name. Max 200 characters |
 | `description` | string | Yes | — | What the component does. Shown in the marketplace |
 | `icon` | string | No | Varies by kind | Emoji icon. Defaults: app=📦, agent=🤖, skill=⚡, tool=🔧, plugin=🔌 |
@@ -111,6 +111,11 @@ These fields apply to all five kinds.
 | `dependencies` | array | Slugs of skills or tools this component requires |
 | `entrypoint` | string | Inline JavaScript executed inside the sandbox for programmatic components |
 | `ui` | object | UI panel configuration. When present, the platform renders the app in a side panel alongside chat |
+| `startup` | string | Shell command to run the app on EC2 boot. Registered as a pm2 process by the openclaw ecosystem generator. Blocked chars: `$`, `;`, `\|`, `` ` ``, `>`, `<` (standalone `&` blocked, `&&` allowed). Max 500 chars |
+| `cleanup` | string | Shell command to stop/remove the app's processes (run on uninstall or app stop) |
+| `port` | integer | Network port the app listens on. Conflicts checked against other apps and reserved ports (22, 19001, 19443). Sets `APP_PORT` env var |
+| `configurable` | boolean | Whether the app has user-editable configuration |
+| `authProvider` | string | OAuth provider name for MCP servers (lowercase alphanumeric). Router injects OAuth tokens per-call |
 
 ### Skill-Specific Fields
 
@@ -424,6 +429,35 @@ entrypoint: |
 
 sandbox: strict
 ```
+
+### MCP Server
+
+An MCP (Model Context Protocol) server is a mini app that advertises tools to the LLM natively via LiteLLM. MCP servers are stateless on EC2 — OAuth tokens are injected per-call by the router from the database.
+
+Use MCP servers when:
+- You want to expose external API capabilities as LLM tools
+- You need authenticated access to a third-party service (tokens managed by the platform)
+- You want LiteLLM to handle tool discovery, execution, and spend tracking
+
+```yaml
+slug: mcp-postgres
+kind: mcp
+name: PostgreSQL MCP
+description: Query and manage PostgreSQL databases via MCP tools
+icon: 🐘
+version: 1.0.0
+port: 5100
+startup: "node server.js"
+authProvider: postgres
+
+permissions:
+  network: [localhost:5100]
+
+model: claude-sonnet-4-6
+sandbox: strict
+```
+
+MCP servers require a `port` field. The `authProvider` field (optional) links to an OAuth connection — the router injects the token via `X-OAuth-Token` header on each tool call. Registration with LiteLLM happens automatically on install; deregistration on uninstall, instance stop, and GDPR delete.
 
 ---
 
