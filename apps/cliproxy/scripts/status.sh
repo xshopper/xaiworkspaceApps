@@ -3,34 +3,27 @@
 set -euo pipefail
 APP_DIR="${HOME}/apps/com.xshopper.cliproxy"
 
-echo "=== CLI Proxy Status ==="
-
-# Binary
-if [ -x "${APP_DIR}/bin/cli-proxy-api" ]; then
-  echo "Binary: INSTALLED"
-else
-  echo "Binary: NOT INSTALLED (run: ~/apps/com.xshopper.cliproxy/scripts/install.sh)"
+# Binary check
+if [ ! -x "${APP_DIR}/bin/cli-proxy-api" ]; then
+  jq -n '{text: "**CLI Proxy Status**\n\nBinary: NOT INSTALLED\n\nRun: `~/apps/com.xshopper.cliproxy/scripts/install.sh`", format: "markdown"}'
   exit 0
 fi
 
-# Service
-if curl -sf http://localhost:4001/v1/models -H "Authorization: Bearer local-only" >/dev/null 2>&1; then
-  echo "Service: RUNNING on port 4001"
-else
-  echo "Service: NOT RUNNING (run: ~/apps/com.xshopper.cliproxy/scripts/start.sh)"
+# Service check
+if ! curl -sf http://localhost:4001/v1/models -H "Authorization: Bearer local-only" >/dev/null 2>&1; then
+  jq -n '{text: "**CLI Proxy Status**\n\nBinary: INSTALLED\nService: NOT RUNNING", buttons: [[{"text": "▶️ Start Service", "callback_data": "@cliproxy start"}, {"text": "🔌 Connect Provider", "callback_data": "@cliproxy connect"}]], format: "markdown"}'
   exit 0
 fi
 
 # Models
-echo ""
-echo "=== Connected Providers ==="
 MODELS=$(curl -sf http://localhost:4001/v1/models -H "Authorization: Bearer local-only" 2>/dev/null)
 COUNT=$(echo "$MODELS" | jq '.data | length' 2>/dev/null || echo 0)
 if [ "$COUNT" -gt 0 ]; then
-  echo "$MODELS" | jq -r '.data[] | "  \(.owned_by // "unknown"): \(.id)"' 2>/dev/null
-  echo ""
-  echo "Total: $COUNT model(s)"
+  MODEL_LIST=$(echo "$MODELS" | jq -r '.data[] | "  \(.owned_by // "unknown"): \(.id)"' 2>/dev/null)
+  # Build status text with model list
+  STATUS_TEXT=$(printf "**CLI Proxy Status**\n\nBinary: INSTALLED\nService: RUNNING on port 4001\n\n**Connected Providers**\n\`\`\`\n%s\n\`\`\`\n\nTotal: %s model(s)" "$MODEL_LIST" "$COUNT")
+  jq -n --arg text "$STATUS_TEXT" \
+    '{text: $text, buttons: [[{"text": "📋 Models", "callback_data": "@cliproxy models"}, {"text": "🔌 Connect Another", "callback_data": "@cliproxy connect"}]], format: "markdown"}'
 else
-  echo "  No providers connected."
-  echo "  To connect: @cliproxy connect claude"
+  jq -n '{text: "**CLI Proxy Status**\n\nBinary: INSTALLED\nService: RUNNING on port 4001\n\n**Connected Providers**\n  No providers connected.", buttons: [[{"text": "🔌 Connect Provider", "callback_data": "@cliproxy connect"}]], format: "markdown"}'
 fi
