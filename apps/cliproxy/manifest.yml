@@ -4,11 +4,12 @@ kind: app
 name: CLI Proxy
 description: Connect your API keys and CLI subscriptions (Grok, Claude, Gemini, Codex, Qwen) as usable models
 icon: "\U0001F50C"
-version: 1.1.0
+version: 1.2.0
 
 commands:
   status: "bash scripts/status.sh"
   connect: "bash scripts/connect.sh {args}"
+  setkey: "bash scripts/setkey.sh {args}"
   models: "bash scripts/models.sh"
   disconnect: "./bin/cli-proxy-api auth remove {args}"
   uninstall: "bash scripts/uninstall.sh"
@@ -27,8 +28,26 @@ persona:
     @cliproxy or @cliproxy status:
       Run: bash ~/apps/com.xshopper.cliproxy/scripts/status.sh
 
+    @cliproxy connect:
+      Shows the interactive connect wizard with category buttons.
+      Run: bash ~/apps/com.xshopper.cliproxy/scripts/connect.sh
+
+    @cliproxy connect apikey [provider]:
+      Run: bash ~/apps/com.xshopper.cliproxy/scripts/connect.sh apikey [provider]
+
+    @cliproxy connect sub [provider]:
+      Run: bash ~/apps/com.xshopper.cliproxy/scripts/connect.sh sub [provider]
+
+    @cliproxy connect local [host:port]:
+      Run: bash ~/apps/com.xshopper.cliproxy/scripts/connect.sh local [host:port]
+
     @cliproxy connect {provider}:
+      Legacy — auto-detects category.
       Run: bash ~/apps/com.xshopper.cliproxy/scripts/connect.sh {provider}
+
+    @cliproxy setkey {provider} {key}:
+      Register an API key directly.
+      Run: bash ~/apps/com.xshopper.cliproxy/scripts/setkey.sh {provider} {key}
 
     @cliproxy models:
       Run: bash ~/apps/com.xshopper.cliproxy/scripts/models.sh
@@ -53,7 +72,7 @@ persona:
     - If the user doesn't have the Chrome addon, tell them to install "xAI Workspace OAuth Bridge" from the Chrome Web Store.
   knowledge: |
     CLI subscriptions (OAuth): claude, codex, gemini, qwen, iflow
-    API key providers: grok, openai, anthropic, gemini-api, groq, mistral
+    API key providers: grok, openai, anthropic, gemini-api, groq, mistral, zai
 
 permissions:
   resources: [storage]
@@ -64,11 +83,16 @@ help: |
   Connect AI providers as usable models.
 
   **Commands:**
-    `@cliproxy status`              — check setup and connected providers
-    `@cliproxy connect claude`      — connect Claude Code (browser OAuth)
-    `@cliproxy connect grok`        — connect xAI Grok (API key)
-    `@cliproxy models`              — list available models
-    `@cliproxy disconnect <name>`   — remove a provider
+    `@cliproxy status`                    — check setup and connected providers
+    `@cliproxy connect`                   — interactive connect wizard
+    `@cliproxy connect apikey`            — list API key providers
+    `@cliproxy connect sub`               — list CLI subscription providers
+    `@cliproxy connect local`             — connect local models (Ollama, etc.)
+    `@cliproxy connect claude`            — connect Claude Code (browser OAuth)
+    `@cliproxy connect grok`              — connect xAI Grok (API key)
+    `@cliproxy setkey <provider> <key>`   — register an API key
+    `@cliproxy models`                    — list available models
+    `@cliproxy disconnect <name>`         — remove a provider
 configurable: true
 startup: "cd ~/apps/com.xshopper.cliproxy && ./bin/cli-proxy-api --config config.yaml"
 cleanup: "pkill -u \"$(id -u)\" -f 'cli-proxy-api --config' 2>/dev/null || true"
@@ -76,4 +100,4 @@ cleanup: "pkill -u \"$(id -u)\" -f 'cli-proxy-api --config' 2>/dev/null || true"
 model: claude-sonnet-4-6
 modelFallback: [claude-haiku-4-5-20251001, ollama/mistral-small:24b]
 sandbox: relaxed
-# v1.1.0
+# v1.2.0
