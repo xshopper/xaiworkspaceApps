@@ -93,7 +93,7 @@ if [ "$SUBCMD" = "apikey" ]; then
   fi
 
   # Validate provider
-  if ! echo "$API_PROVIDERS" | grep -qw "$PROVIDER"; then
+  if [[ " $API_PROVIDERS " != *" $PROVIDER "* ]]; then
     echo "Unknown API key provider: $PROVIDER"
     echo "Valid providers: $API_PROVIDERS"
     exit 1
@@ -139,7 +139,7 @@ if [ "$SUBCMD" = "sub" ]; then
   fi
 
   # Validate provider
-  if ! echo "$CLI_PROVIDERS" | grep -qw "$PROVIDER"; then
+  if [[ " $CLI_PROVIDERS " != *" $PROVIDER "* ]]; then
     echo "Unknown CLI subscription provider: $PROVIDER"
     echo "Valid providers: $CLI_PROVIDERS"
     exit 1
@@ -158,7 +158,8 @@ if [ "$SUBCMD" = "sub" ]; then
   BEFORE=$(curl -sf http://localhost:4001/v1/models -H "Authorization: Bearer local-only" 2>/dev/null | jq '.data | length' 2>/dev/null || echo 0)
 
   # Kill any previous orphaned login processes (leftover from timed-out OAuth attempts)
-  pkill -f "cli-proxy-api.*-login" 2>/dev/null || true
+  # Scope to current user and specific login flag to avoid killing unrelated processes
+  pkill -u "$(id -u)" -f "cli-proxy-api.*${LOGIN_FLAG}" 2>/dev/null || true
   sleep 0.5
 
   # Run CLI login in background — captures URL output, waits for callback
@@ -240,6 +241,35 @@ if [ "$SUBCMD" = "local" ]; then
   # Normalize: strip protocol prefix if present
   HOST_PORT=$(echo "$HOST_PORT" | sed 's|^https\?://||')
 
+  # Validate HOST_PORT — only allow local/private addresses (prevent SSRF)
+  HOST="${HOST_PORT%%:*}"
+  case "$HOST" in
+    localhost|127.0.0.1|host.docker.internal) ;; # OK
+    10.*|192.168.*) ;; # OK — private range
+    172.*)
+      SECOND_OCTET="${HOST#172.}"
+      SECOND_OCTET="${SECOND_OCTET%%.*}"
+      if [ "$SECOND_OCTET" -ge 16 ] && [ "$SECOND_OCTET" -le 31 ] 2>/dev/null; then
+        : # OK — private range 172.16-31.*
+      else
+        echo "ERROR: Only local/private addresses allowed (got: $HOST)"
+        exit 1
+      fi
+      ;;
+    *)
+      echo "ERROR: Only local/private addresses allowed (got: $HOST)"
+      echo "Use localhost:<port>, 127.0.0.1:<port>, or a private IP."
+      exit 1
+      ;;
+  esac
+
+  # Validate port is numeric
+  PORT="${HOST_PORT##*:}"
+  if ! [[ "$PORT" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: Invalid port: $PORT"
+    exit 1
+  fi
+
   echo "Discovering models at ${HOST_PORT}..."
   echo ""
 
@@ -281,7 +311,7 @@ if [ "$SUBCMD" = "local" ]; then
   echo ""
   echo "To register these models with the platform, the local server must be"
   echo "accessible from your xAI Workspace instance. If running on the same"
-  echo "machine, use localhost:${HOST_PORT##*:}."
+  echo "machine, use localhost:${PORT}."
   echo ""
 
   # Register local models with the platform router
@@ -290,18 +320,20 @@ if [ "$SUBCMD" = "local" ]; then
   if [ -n "$ROUTER_URL" ] && [ "$ROUTER_URL" != "local-only" ]; then
     # Build model list from either API format
     if [ -n "$MODELS_JSON" ] && echo "$MODELS_JSON" | jq -e '.data' >/dev/null 2>&1; then
-      MODELS=$(echo "$MODELS_JSON" | jq --arg port "${HOST_PORT##*:}" \
+      MODELS=$(echo "$MODELS_JSON" | jq \
         '[.data[] | {name: ("ollama/" + .id), provider: "cliproxy"}]')
     else
-      MODELS=$(echo "$OLLAMA_JSON" | jq --arg port "${HOST_PORT##*:}" \
+      MODELS=$(echo "$OLLAMA_JSON" | jq \
         '[.models[] | {name: ("ollama/" + .name), provider: "cliproxy"}]')
     fi
 
-    PORT="${HOST_PORT##*:}"
+    # Use jq to build registration JSON safely (PORT already validated as numeric)
+    REG_BODY=$(jq -n --argjson models "$MODELS" --argjson port "$PORT" \
+      '{models: $models, port: $port, registeredBy: "cliproxy-local"}')
     REG_RESULT=$(curl -sf -X POST "${ROUTER_URL}/api/models/register" \
       -H "Authorization: Bearer ${API_KEY}" \
       -H "Content-Type: application/json" \
-      -d "{\"models\": ${MODELS}, \"port\": ${PORT}, \"registeredBy\": \"cliproxy-local\"}" 2>/dev/null) || true
+      -d "$REG_BODY" 2>/dev/null) || true
     if echo "$REG_RESULT" | jq -e '.ok' >/dev/null 2>&1; then
       REG_COUNT=$(echo "$REG_RESULT" | jq '.models | length')
       echo "Registered ${REG_COUNT} local model(s) with the platform. Type /models to switch."
@@ -315,12 +347,12 @@ fi
 # ── Legacy: bare provider name (auto-detect category) ──
 # For backward compatibility: @cliproxy connect claude → routes to sub flow
 # @cliproxy connect grok → routes to apikey flow
-if echo "$CLI_PROVIDERS" | grep -qw "$SUBCMD"; then
+if [[ " $CLI_PROVIDERS " == *" $SUBCMD "* ]]; then
   # Re-exec as sub flow
   exec bash "${APP_DIR}/scripts/connect.sh" sub "$SUBCMD"
 fi
 
-if echo "$API_PROVIDERS" | grep -qw "$SUBCMD"; then
+if [[ " $API_PROVIDERS " == *" $SUBCMD "* ]]; then
   # Re-exec as apikey flow
   exec bash "${APP_DIR}/scripts/connect.sh" apikey "$SUBCMD"
 fi

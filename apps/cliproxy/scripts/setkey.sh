@@ -16,7 +16,7 @@ fi
 
 # Valid API key providers
 VALID_PROVIDERS="grok openai anthropic gemini-api groq mistral zai"
-if ! echo "$VALID_PROVIDERS" | grep -qw "$PROVIDER"; then
+if [[ " $VALID_PROVIDERS " != *" $PROVIDER "* ]]; then
   echo "Unknown API key provider: $PROVIDER"
   echo "Valid providers: $VALID_PROVIDERS"
   exit 1
@@ -31,11 +31,12 @@ fi
 # Count models before setting key
 BEFORE=$(curl -sf http://localhost:4001/v1/models -H "Authorization: Bearer local-only" 2>/dev/null | jq '.data | length' 2>/dev/null || echo 0)
 
-# Set the API key via CLIProxyAPI admin endpoint
+# Set the API key via CLIProxyAPI admin endpoint (use jq to prevent JSON injection)
+JSON_BODY=$(jq -n --arg provider "$PROVIDER" --arg key "$API_KEY" '{provider: $provider, access_token: $key}')
 RESULT=$(curl -sf -X POST http://localhost:4001/admin/token \
   -H "Authorization: Bearer local-only" \
   -H "Content-Type: application/json" \
-  -d "{\"provider\": \"${PROVIDER}\", \"access_token\": \"${API_KEY}\"}" 2>/dev/null) || true
+  -d "$JSON_BODY" 2>/dev/null) || true
 
 if echo "$RESULT" | jq -e '.ok' >/dev/null 2>&1; then
   echo "${PROVIDER} API key configured successfully!"
@@ -55,14 +56,39 @@ else
     *)          CONFIG_KEY="${PROVIDER}-api-key" ;;
   esac
 
-  # Append to config.yaml if not already present
+  # Safely update config.yaml — use Python to handle YAML-special characters in keys
   CONFIG_FILE="${APP_DIR}/config.yaml"
-  if grep -q "^${CONFIG_KEY}:" "$CONFIG_FILE" 2>/dev/null; then
-    # Replace existing key
-    sed -i "s|^${CONFIG_KEY}:.*|${CONFIG_KEY}: \"${API_KEY}\"|" "$CONFIG_FILE"
-  else
-    echo "${CONFIG_KEY}: \"${API_KEY}\"" >> "$CONFIG_FILE"
-  fi
+  python3 -c "
+import sys, re
+config_key = sys.argv[1]
+api_key = sys.argv[2]
+config_file = sys.argv[3]
+
+# Read existing config
+try:
+    with open(config_file, 'r') as f:
+        lines = f.readlines()
+except FileNotFoundError:
+    lines = []
+
+# Escape the key value for YAML (wrap in quotes)
+safe_value = '\"' + api_key.replace('\\\\', '\\\\\\\\').replace('\"', '\\\\\"') + '\"'
+new_line = config_key + ': ' + safe_value + '\n'
+
+# Replace existing key or append
+found = False
+for i, line in enumerate(lines):
+    if line.startswith(config_key + ':'):
+        lines[i] = new_line
+        found = True
+        break
+
+if not found:
+    lines.append(new_line)
+
+with open(config_file, 'w') as f:
+    f.writelines(lines)
+" "$CONFIG_KEY" "$API_KEY" "$CONFIG_FILE"
 
   # Restart CLIProxyAPI to pick up the new key
   pkill -f "cli-proxy-api --config" 2>/dev/null || true
