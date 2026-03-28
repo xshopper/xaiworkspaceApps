@@ -59,17 +59,9 @@ PROVIDER="${2:-}"
 
 # ── No arguments: show category selection ──
 if [ -z "$SUBCMD" ]; then
-  echo "**Connect a Provider**"
-  echo ""
-  echo "Choose a category:"
-  echo ""
-  echo "**API Key** — paste an API key from your provider"
-  echo "  Providers: Grok, OpenAI, Anthropic, Gemini API, Groq, Mistral, Z.ai"
-  echo ""
-  echo "**CLI Subscription** — authenticate via browser OAuth"
-  echo "  Providers: Claude, Codex, Gemini, Qwen, iFlow"
-  echo ""
-  echo "**Local Models** — connect to Ollama, LM Studio, or any OpenAI-compatible server"
+  cat << 'RESPONSE'
+{"text":"**Connect a Provider**\n\nChoose a connection type:","buttons":[[{"text":"🔑 API Key","callback_data":"@cliproxy connect apikey"},{"text":"🌐 CLI Subscription","callback_data":"@cliproxy connect sub"}],[{"text":"💻 Local Models","callback_data":"@cliproxy connect local"}]],"format":"markdown"}
+RESPONSE
   exit 0
 fi
 
@@ -78,17 +70,9 @@ if [ "$SUBCMD" = "apikey" ]; then
   ensure_running
 
   if [ -z "$PROVIDER" ]; then
-    echo "**API Key Providers**"
-    echo ""
-    echo "Select a provider to connect:"
-    echo ""
-    echo "  **grok** — xAI Grok (console.x.ai)"
-    echo "  **openai** — OpenAI (platform.openai.com)"
-    echo "  **anthropic** — Anthropic (console.anthropic.com)"
-    echo "  **gemini-api** — Google Gemini API (aistudio.google.com)"
-    echo "  **groq** — Groq (console.groq.com)"
-    echo "  **mistral** — Mistral (console.mistral.ai)"
-    echo "  **zai** — Z.ai / Zhipu (z.ai)"
+    cat << 'RESPONSE'
+{"text":"**API Key Providers**\n\nSelect a provider to connect:","buttons":[[{"text":"Grok","callback_data":"@cliproxy connect apikey grok"},{"text":"OpenAI","callback_data":"@cliproxy connect apikey openai"}],[{"text":"Anthropic","callback_data":"@cliproxy connect apikey anthropic"},{"text":"Gemini API","callback_data":"@cliproxy connect apikey gemini-api"}],[{"text":"Groq","callback_data":"@cliproxy connect apikey groq"},{"text":"Mistral","callback_data":"@cliproxy connect apikey mistral"}],[{"text":"Z.ai","callback_data":"@cliproxy connect apikey zai"},{"text":"← Back","callback_data":"@cliproxy connect"}]],"format":"markdown"}
+RESPONSE
     exit 0
   fi
 
@@ -111,13 +95,8 @@ if [ "$SUBCMD" = "apikey" ]; then
     *)          HINT="" ;;
   esac
 
-  echo "**Connect ${PROVIDER}**"
-  echo ""
-  if [ -n "$HINT" ]; then
-    echo "$HINT"
-    echo ""
-  fi
-  echo "Paste your API key below:"
+  jq -n --arg provider "$PROVIDER" --arg hint "$HINT" \
+    '{text: ("**Connect " + $provider + "**\n\n" + $hint + "\n\nPaste your API key below:\n\n`@cliproxy setkey " + $provider + " YOUR_API_KEY`"), buttons: [[{"text": "← Back to providers", "callback_data": "@cliproxy connect apikey"}, {"text": "← Back to categories", "callback_data": "@cliproxy connect"}]], format: "markdown"}'
   exit 0
 fi
 
@@ -126,15 +105,9 @@ if [ "$SUBCMD" = "sub" ]; then
   ensure_running
 
   if [ -z "$PROVIDER" ]; then
-    echo "**CLI Subscription Providers**"
-    echo ""
-    echo "Select a provider to authenticate via browser OAuth:"
-    echo ""
-    echo "  **claude** — Claude Code (Anthropic)"
-    echo "  **codex** — Codex CLI (OpenAI)"
-    echo "  **gemini** — Gemini CLI (Google)"
-    echo "  **qwen** — Qwen Code"
-    echo "  **iflow** — iFlow"
+    cat << 'RESPONSE'
+{"text":"**CLI Subscription Providers**\n\nSelect a provider to authenticate via browser OAuth:","buttons":[[{"text":"Claude","callback_data":"@cliproxy connect sub claude"},{"text":"Codex","callback_data":"@cliproxy connect sub codex"},{"text":"Gemini","callback_data":"@cliproxy connect sub gemini"}],[{"text":"Qwen","callback_data":"@cliproxy connect sub qwen"},{"text":"iFlow","callback_data":"@cliproxy connect sub iflow"}],[{"text":"← Back","callback_data":"@cliproxy connect"}]],"format":"markdown"}
+RESPONSE
     exit 0
   fi
 
@@ -182,45 +155,11 @@ if [ "$SUBCMD" = "sub" ]; then
     exit 1
   fi
 
-  echo ""
-  echo "Open this link to authenticate:"
-  echo "$URL"
-  echo ""
-  echo "The xAI Workspace Chrome addon will handle the callback automatically."
-  echo ""
-  echo "Waiting for authentication..."
-
-  # Poll for new models to appear (indicates successful auth)
-  for i in $(seq 1 120); do
-    # Check if login process completed
-    if ! kill -0 $LOGIN_PID 2>/dev/null; then
-      # Process exited — check if models increased
-      AFTER=$(curl -sf http://localhost:4001/v1/models -H "Authorization: Bearer local-only" 2>/dev/null | jq '.data | length' 2>/dev/null || echo 0)
-      if [ "$AFTER" -gt "$BEFORE" ]; then
-        echo ""
-        echo "${PROVIDER} connected successfully!"
-        show_models
-        register_models
-        rm -f "${LOG_FILE}"
-        exit 0
-      else
-        echo ""
-        echo "Authentication completed but no new models appeared."
-        echo "Log:"
-        cat "${LOG_FILE}" 2>/dev/null
-        rm -f "${LOG_FILE}"
-        exit 1
-      fi
-    fi
-    sleep 3
-  done
-
-  # Timeout — kill the background process
-  kill $LOGIN_PID 2>/dev/null || true
-  rm -f "${LOG_FILE}"
-  echo ""
-  echo "Timed out waiting for authentication. Please try again."
-  exit 1
+  # Output the URL as structured JSON with buttons — exit immediately
+  # The login process continues in background; the Chrome addon handles the callback
+  jq -n --arg url "$URL" --arg provider "$PROVIDER" \
+    '{text: ("**Connect " + $provider + "**\n\nOpen this link to authenticate:\n\n" + $url + "\n\nThe xAI Workspace Chrome addon handles the callback automatically.\n\nAfter authenticating, click **Check Models** below."), buttons: [[{"text": "🔗 Open Auth Link", "url": $url}],[{"text": "📋 Check Models", "callback_data": "@cliproxy models"},{"text": "← Back", "callback_data": "@cliproxy connect sub"}]], format: "markdown"}'
+  exit 0
 fi
 
 # ── Subcommand: local (local models) ──
@@ -230,11 +169,9 @@ if [ "$SUBCMD" = "local" ]; then
   HOST_PORT="${PROVIDER:-}"
 
   if [ -z "$HOST_PORT" ]; then
-    echo "**Connect Local Models**"
-    echo ""
-    echo "Connect to Ollama, LM Studio, or any OpenAI-compatible server."
-    echo ""
-    echo "Enter your server address (e.g., localhost:11434):"
+    cat << 'RESPONSE'
+{"text":"**Local Models**\n\nEnter your model server address.\n\nType: `@cliproxy connect local localhost:11434`","buttons":[[{"text":"localhost:11434 (Ollama)","callback_data":"@cliproxy connect local localhost:11434"},{"text":"localhost:1234 (LM Studio)","callback_data":"@cliproxy connect local localhost:1234"}],[{"text":"← Back","callback_data":"@cliproxy connect"}]],"format":"markdown"}
+RESPONSE
     exit 0
   fi
 
