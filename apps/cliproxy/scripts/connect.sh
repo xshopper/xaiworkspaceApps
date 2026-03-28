@@ -32,7 +32,7 @@ register_models() {
     REG_RESULT=$(curl -sf -X POST "${ROUTER_URL}/api/models/register" \
       -H "Authorization: Bearer ${API_KEY}" \
       -H "Content-Type: application/json" \
-      -d "{\"models\": ${MODELS}, \"port\": 4001, \"registeredBy\": \"cliproxy\"}" 2>/dev/null) || true
+      -d "$(jq -n --argjson models "$MODELS" '{models: $models, port: 4001, registeredBy: "cliproxy"}')" 2>/dev/null) || true
     if echo "$REG_RESULT" | jq -e '.ok' >/dev/null 2>&1; then
       local REG_COUNT
       REG_COUNT=$(echo "$REG_RESULT" | jq '.models | length')
@@ -241,25 +241,42 @@ if [ "$SUBCMD" = "local" ]; then
   # Normalize: strip protocol prefix if present
   HOST_PORT=$(echo "$HOST_PORT" | sed 's|^https\?://||')
 
-  # Validate HOST_PORT — only allow local/private addresses (prevent SSRF)
+  # Validate HOST_PORT — only allow known local hostnames or literal private IPs (prevent SSRF)
   HOST="${HOST_PORT%%:*}"
+  # Only allow known hostnames or numeric IPs matching private ranges
   case "$HOST" in
-    localhost|127.0.0.1|host.docker.internal) ;; # OK
-    10.*|192.168.*) ;; # OK — private range
-    172.*)
-      SECOND_OCTET="${HOST#172.}"
-      SECOND_OCTET="${SECOND_OCTET%%.*}"
-      if [ "$SECOND_OCTET" -ge 16 ] && [ "$SECOND_OCTET" -le 31 ] 2>/dev/null; then
-        : # OK — private range 172.16-31.*
-      else
-        echo "ERROR: Only local/private addresses allowed (got: $HOST)"
+    localhost|127.0.0.1|host.docker.internal) ;; # OK — known local
+    *)
+      # Reject anything that isn't a numeric IP (blocks DNS-based SSRF like 10.evil.com)
+      if ! echo "$HOST" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+        echo "ERROR: Only localhost, 127.0.0.1, host.docker.internal, or private IPs allowed (got: $HOST)"
         exit 1
       fi
-      ;;
-    *)
-      echo "ERROR: Only local/private addresses allowed (got: $HOST)"
-      echo "Use localhost:<port>, 127.0.0.1:<port>, or a private IP."
-      exit 1
+      # Validate private IP ranges
+      FIRST_OCTET="${HOST%%.*}"
+      case "$FIRST_OCTET" in
+        10) ;; # 10.0.0.0/8
+        192)
+          if ! echo "$HOST" | grep -qE '^192\.168\.'; then
+            echo "ERROR: Only private IPs allowed (got: $HOST)"
+            exit 1
+          fi
+          ;;
+        172)
+          SECOND_OCTET=$(echo "$HOST" | cut -d. -f2)
+          if [ "$SECOND_OCTET" -ge 16 ] && [ "$SECOND_OCTET" -le 31 ] 2>/dev/null; then
+            : # 172.16-31.0.0/12
+          else
+            echo "ERROR: Only private IPs allowed (got: $HOST)"
+            exit 1
+          fi
+          ;;
+        *)
+          echo "ERROR: Only private IPs allowed (got: $HOST)"
+          echo "Use localhost:<port>, 127.0.0.1:<port>, or a private IP."
+          exit 1
+          ;;
+      esac
       ;;
   esac
 

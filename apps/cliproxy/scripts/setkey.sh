@@ -123,7 +123,7 @@ if [ -n "$ROUTER_URL" ] && [ "$ROUTER_URL" != "local-only" ]; then
   REG_RESULT=$(curl -sf -X POST "${ROUTER_URL}/api/models/register" \
     -H "Authorization: Bearer ${PLATFORM_KEY}" \
     -H "Content-Type: application/json" \
-    -d "{\"models\": ${MODELS}, \"port\": 4001, \"registeredBy\": \"cliproxy\"}" 2>/dev/null) || true
+    -d "$(jq -n --argjson models "$MODELS" '{models: $models, port: 4001, registeredBy: "cliproxy"}')" 2>/dev/null) || true
   if echo "$REG_RESULT" | jq -e '.ok' >/dev/null 2>&1; then
     REG_COUNT=$(echo "$REG_RESULT" | jq '.models | length')
     echo ""
