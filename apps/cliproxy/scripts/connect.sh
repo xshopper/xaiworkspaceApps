@@ -224,16 +224,6 @@ RESPONSE
     exit 1
   fi
 
-  # Auto-translate localhost to host.docker.internal inside Docker containers
-  if [ -f /.dockerenv ] || grep -q docker /proc/1/cgroup 2>/dev/null; then
-    case "$HOST" in
-      localhost|127.0.0.1)
-        HOST="host.docker.internal"
-        HOST_PORT="${HOST}:${PORT}"
-        ;;
-    esac
-  fi
-
   echo "Discovering models at ${HOST_PORT}..."
   echo ""
 
