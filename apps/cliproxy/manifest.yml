@@ -4,7 +4,7 @@ kind: app
 name: CLI Proxy
 description: Connect your API keys and CLI subscriptions (Grok, Claude, Gemini, Codex, Qwen) as usable models
 icon: "\U0001F50C"
-version: 1.2.0
+version: 1.2.1
 
 commands:
   status: "bash scripts/status.sh"
