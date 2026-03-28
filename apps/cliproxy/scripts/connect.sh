@@ -170,7 +170,7 @@ if [ "$SUBCMD" = "local" ]; then
 
   if [ -z "$HOST_PORT" ]; then
     cat << 'RESPONSE'
-{"text":"**Local Models**\n\nEnter your model server address.\n\nType: `@cliproxy connect local localhost:11434`","buttons":[[{"text":"localhost:11434 (Ollama)","callback_data":"@cliproxy connect local localhost:11434"},{"text":"localhost:1234 (LM Studio)","callback_data":"@cliproxy connect local localhost:1234"}],[{"text":"← Back","callback_data":"@cliproxy connect"}]],"format":"markdown"}
+{"text":"**Local Models**\n\nEnter your model server address.\n\nType: `@cliproxy connect local host.docker.internal:11434`","buttons":[[{"text":"Ollama (11434)","callback_data":"@cliproxy connect local host.docker.internal:11434"},{"text":"LM Studio (1234)","callback_data":"@cliproxy connect local host.docker.internal:1234"}],[{"text":"← Back","callback_data":"@cliproxy connect"}]],"format":"markdown"}
 RESPONSE
     exit 0
   fi
