@@ -342,9 +342,30 @@ function handleConfigUpdate(msg) {
       }
     }
 
+    // Fix gateway auth: ensure password mode with correct GW_PASSWORD
+    if (msg.gwPassword) {
+      if (!config.gateway) config.gateway = {};
+      const needsFix = !config.gateway.auth
+        || config.gateway.auth.mode !== 'password'
+        || config.gateway.auth.password !== msg.gwPassword;
+      if (needsFix) {
+        config.gateway.auth = { mode: 'password', password: msg.gwPassword };
+        changed = true;
+        console.log('[bridge] Fixed gateway auth mode to password');
+      }
+      // Ensure controlUi is configured for Docker/LAN
+      if (!config.gateway.controlUi?.dangerouslyAllowHostHeaderOriginFallback) {
+        if (!config.gateway.controlUi) config.gateway.controlUi = {};
+        config.gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback = true;
+        changed = true;
+      }
+    }
+
     if (changed) {
       fs.writeFileSync(OC_CONFIG_PATH, JSON.stringify(config, null, 2) + '\n');
       console.log('[bridge] openclaw.json updated from config_update');
+      // Restart openclaw gateway to pick up config changes
+      try { execSync('pm2 restart openclaw --no-color', { timeout: 10000 }); } catch {}
     }
   } catch (err) {
     console.error(`[bridge] Config update failed: ${err.message}`);
