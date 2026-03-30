@@ -112,6 +112,70 @@ print(f'HAS_BASE_URL={json.dumps(\"baseUrl\" in m)}')
     assert "model is valid ($MODEL)" "$(echo $VALID_MODELS | grep -qw "$MODEL" && echo true || echo false)"
   fi
 
+  # Sandbox is valid (if set — defaults to "strict")
+  assert "sandbox is valid ($SANDBOX)" "$(echo $VALID_SANDBOX | grep -qw "$SANDBOX" && echo true || echo false)"
+
+  # Version format (semver: MAJOR.MINOR.PATCH)
+  if echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+    assert "version is semver" "true"
+  else
+    assert "version is semver (got: $VERSION)" "false"
+  fi
+
+  # Icon is set (required for user-facing kinds)
+  if [ "$KIND" = "app" ] || [ "$KIND" = "agent" ]; then
+    assert "icon is set" "$([ -n "$ICON" ] && echo true || echo false)"
+  fi
+
+  # Validate permissions entries (if present)
+  if [ "$HAS_PERMISSIONS" = "true" ]; then
+    BAD_PERMS=$(python3 -c "
+import yaml
+valid = set('$VALID_PERMISSIONS'.split())
+valid_integrations = set('$VALID_INTEGRATIONS'.split())
+with open('$manifest') as f:
+    m = yaml.safe_load(f)
+perms = m.get('permissions', {})
+bad = []
+for v in perms.get('resources', []):
+    if v not in valid:
+        bad.append(v)
+for v in perms.get('chat', []):
+    if v not in valid:
+        bad.append(v)
+for v in perms.get('device', []):
+    if v not in valid:
+        bad.append(v)
+for v in perms.get('integrations', []):
+    if v not in valid_integrations:
+        bad.append(v)
+print(','.join(bad))
+" 2>/dev/null)
+    if [ -z "$BAD_PERMS" ]; then
+      assert "permissions are valid" "true"
+    else
+      assert "permissions are valid (invalid: $BAD_PERMS)" "false"
+    fi
+  fi
+
+  # Validate trigger kinds (if present)
+  if [ "$HAS_TRIGGERS" = "true" ]; then
+    BAD_TRIGGERS=$(python3 -c "
+import yaml
+valid = set('$VALID_TRIGGER_KINDS'.split())
+with open('$manifest') as f:
+    m = yaml.safe_load(f)
+triggers = m.get('triggers', [])
+bad = [t.get('kind','<missing>') for t in triggers if t.get('kind') not in valid]
+print(','.join(bad))
+" 2>/dev/null)
+    if [ -z "$BAD_TRIGGERS" ]; then
+      assert "trigger kinds are valid" "true"
+    else
+      assert "trigger kinds are valid (invalid: $BAD_TRIGGERS)" "false"
+    fi
+  fi
+
   # Kind-specific checks
   case "$KIND" in
     app|agent)

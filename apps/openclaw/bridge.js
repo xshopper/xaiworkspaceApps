@@ -294,6 +294,13 @@ function forwardToRouter(raw) {
 // ── Config update handler ────────────────────────────────────────────────────
 
 function handleConfigUpdate(msg) {
+  // File-based mutex: the config-sync pm2 process (openclaw-config-sync.sh)
+  // watches openclaw.json for changes and pushes them upstream. This pull flag
+  // tells config-sync to skip its sync cycle while we're doing a pull (read →
+  // modify → write). Without this, config-sync could read a half-written file
+  // or push stale values back upstream immediately after we write.
+  //
+  // Protocol: create flag → read → modify → write → remove flag (in finally).
   const pullFlag = '/tmp/.config-pull-active';
   try {
     if (!fs.existsSync(OC_CONFIG_PATH)) {
@@ -360,11 +367,11 @@ function handleExec(ws, msg) {
   const spawnArgs = usesSudo
     ? ['-u', execUser, '/bin/bash', '-c', command]
     : ['-c', command];
+  // Note: spawn() ignores timeout and maxBuffer (those are exec/execFile only).
+  // We enforce both manually below via setTimeout and byte counting.
   const opts = {
     shell: false,
     cwd: cwd || HOME_DIR,
-    timeout: EXEC_TIMEOUT_MS,
-    maxBuffer: EXEC_MAX_BUFFER,
     env: { ...process.env, HOME: HOME_DIR },
   };
 
@@ -372,8 +379,44 @@ function handleExec(ws, msg) {
   let stdout = '';
   let stderr = '';
   let streamed = false;
+  let killed = false;
+  let totalBytes = 0;
+
+  // Manual timeout — spawn does not support the timeout option
+  const killTimer = setTimeout(() => {
+    if (!killed) {
+      killed = true;
+      proc.kill('SIGTERM');
+      // Give it a moment to clean up, then force kill
+      setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 2000);
+    }
+  }, EXEC_TIMEOUT_MS);
+
+  function sendResult(code, signal) {
+    clearTimeout(killTimer);
+    if (ws.readyState !== WebSocket.OPEN) return;
+    const timedOut = killed && !signal;
+    ws.send(JSON.stringify({
+      type: 'exec_result', id,
+      code: code ?? (signal ? 1 : 0),
+      stdout: streamed ? '' : stdout,
+      stderr: stderr
+        || (timedOut ? `Timed out after ${EXEC_TIMEOUT_MS}ms` : '')
+        || (signal ? `Killed by ${signal}` : ''),
+    }));
+  }
 
   proc.stdout.on('data', (chunk) => {
+    totalBytes += chunk.length;
+    // Manual buffer limit — spawn does not support maxBuffer
+    if (totalBytes > EXEC_MAX_BUFFER) {
+      if (!killed) {
+        killed = true;
+        stderr += `\nOutput exceeded max buffer (${EXEC_MAX_BUFFER} bytes)`;
+        proc.kill('SIGTERM');
+      }
+      return;
+    }
     const data = chunk.toString();
     stdout += data;
     streamed = true;
@@ -383,22 +426,24 @@ function handleExec(ws, msg) {
   });
 
   proc.stderr.on('data', (chunk) => {
+    totalBytes += chunk.length;
+    if (totalBytes > EXEC_MAX_BUFFER) {
+      if (!killed) {
+        killed = true;
+        stderr += `\nOutput exceeded max buffer (${EXEC_MAX_BUFFER} bytes)`;
+        proc.kill('SIGTERM');
+      }
+      return;
+    }
     stderr += chunk.toString();
   });
 
   proc.on('close', (code, signal) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      // Omit stdout from final result if already streamed via exec_output
-      ws.send(JSON.stringify({
-        type: 'exec_result', id,
-        code: code ?? (signal ? 1 : 0),
-        stdout: streamed ? '' : stdout,
-        stderr: stderr || (signal ? `Killed by ${signal}` : ''),
-      }));
-    }
+    sendResult(code, signal);
   });
 
   proc.on('error', (err) => {
+    clearTimeout(killTimer);
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'exec_result', id, code: 1, stdout: '', stderr: err.message }));
     }

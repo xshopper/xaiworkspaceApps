@@ -1,7 +1,7 @@
 import puppeteer, { Browser, Page } from 'puppeteer-core';
 
-const API_KEY = process.env.D24_API_KEY || 'dk_rf4WDwFj4lmMATzbKgM3ToAkKcCgMkgO';
-const BASE_URL = 'https://xaiworkspace.com';
+const API_KEY = process.env.D24_API_KEY || '';
+const BASE_URL = process.env.E2E_BASE_URL || 'https://xaiworkspace.com';
 
 let browser: Browser;
 let page: Page;
@@ -16,13 +16,16 @@ async function getWsUrl(): Promise<string> {
   return `${ws.endpoint}/${ws.stageName}`;
 }
 
-const EMAIL = process.env.TEST_EMAIL || 'gbacskai@gmail.com';
-const PASSWORD = process.env.TEST_PASSWORD || 'ptgrbM86NEcxsGiXqTRe';
+const EMAIL = process.env.E2E_EMAIL || process.env.TEST_EMAIL || '';
+const PASSWORD = process.env.E2E_PASSWORD || process.env.TEST_PASSWORD || '';
 
 /**
  * Connect to the remote done24bot browser, open the base URL, and login if needed.
  */
 export async function setup(): Promise<Page> {
+  if (!API_KEY) throw new Error('D24_API_KEY env var is required');
+  if (!EMAIL || !PASSWORD) throw new Error('E2E_EMAIL and E2E_PASSWORD env vars are required');
+
   const wsUrl = await getWsUrl();
   browser = await puppeteer.connect({
     browserWSEndpoint: `${wsUrl}?apiKey=${API_KEY}`,
