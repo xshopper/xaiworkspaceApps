@@ -67,6 +67,7 @@ const MAX_BACKOFF        = 60000;
 const SHUTDOWN_GRACE_MS  = 1500;
 const EXEC_TIMEOUT_MS    = 30000;
 const EXEC_MAX_BUFFER    = 1024 * 1024;
+const MAX_COMMAND_LENGTH = 10240;
 
 function backoff(attempt) {
   const delay = Math.min(INITIAL_BACKOFF * Math.pow(2, attempt), MAX_BACKOFF);
@@ -383,6 +384,15 @@ let runningExec = 0;
 function handleExec(ws, msg) {
   const { id, command, user, cwd } = msg;
   if (!id || !command) return;
+
+  // Command length guard
+  if (typeof command !== 'string' || command.length > MAX_COMMAND_LENGTH) {
+    console.warn(`[bridge] Exec rejected: command too long (${command?.length ?? 0} bytes, max ${MAX_COMMAND_LENGTH})`);
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'exec_result', id, code: -1, stdout: '', stderr: `Command exceeds max length (${MAX_COMMAND_LENGTH} bytes)` }));
+    }
+    return;
+  }
 
   // Concurrency guard — reject if too many execs are already running
   if (runningExec >= MAX_CONCURRENT_EXEC) {
