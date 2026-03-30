@@ -21,7 +21,7 @@
  */
 
 const WebSocket = require('ws');
-const { spawn, execSync } = require('child_process');
+const { spawn, execSync, execFileSync } = require('child_process');
 const { randomUUID } = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -377,13 +377,27 @@ function handleConfigUpdate(msg) {
 
 // ── Exec handler ─────────────────────────────────────────────────────────────
 
+const MAX_CONCURRENT_EXEC = 5;
+let runningExec = 0;
+
 function handleExec(ws, msg) {
   const { id, command, user, cwd } = msg;
   if (!id || !command) return;
 
+  // Concurrency guard — reject if too many execs are already running
+  if (runningExec >= MAX_CONCURRENT_EXEC) {
+    console.warn(`[bridge] Exec rejected: ${runningExec} already running (max ${MAX_CONCURRENT_EXEC})`);
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'exec_result', id, code: 1, stdout: '', stderr: `Too many concurrent exec requests (max ${MAX_CONCURRENT_EXEC})` }));
+    }
+    return;
+  }
+  runningExec++;
+
   // Validate user: only allow CLIENT_USER or no user (never arbitrary usernames)
   if (user && CLIENT_USER && user !== CLIENT_USER) {
     console.warn(`[bridge] Exec rejected: requested user '${user}' does not match CLIENT_USER '${CLIENT_USER}'`);
+    runningExec--;
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'exec_result', id, code: 1, stdout: '', stderr: 'User mismatch' }));
     }
@@ -470,10 +484,12 @@ function handleExec(ws, msg) {
   });
 
   proc.on('close', (code, signal) => {
+    runningExec--;
     sendResult(code, signal);
   });
 
   proc.on('error', (err) => {
+    runningExec--;
     clearTimeout(killTimer);
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'exec_result', id, code: 1, stdout: '', stderr: err.message }));
@@ -498,6 +514,27 @@ const APPS_DIR = path.join(HOME_DIR, 'apps');
 
 async function handleInstallApp(ws, msg) {
   const { id, slug, identifier, artifactUrl, sourceUrl, env, manifest } = msg;
+
+  // Validate slug to prevent path traversal and injection
+  if (!/^[a-zA-Z0-9_-]+$/.test(slug)) {
+    const errMsg = `Invalid app slug: ${slug}`;
+    console.error(`[bridge] ${errMsg}`);
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'install_result', id, slug, status: 'error', error: errMsg }));
+    }
+    return;
+  }
+
+  // Validate identifier if provided
+  if (identifier && !/^[a-zA-Z0-9._-]+$/.test(identifier)) {
+    const errMsg = `Invalid app identifier: ${identifier}`;
+    console.error(`[bridge] ${errMsg}`);
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'install_result', id, slug, status: 'error', error: errMsg }));
+    }
+    return;
+  }
+
   const appDir = path.join(APPS_DIR, identifier || `com.xshopper.${slug}`);
 
   console.log(`[bridge] Installing app: ${slug}`);
@@ -520,37 +557,44 @@ async function handleInstallApp(ws, msg) {
     fs.mkdirSync(appDir, { recursive: true });
     if (artifactUrl) {
       const tmpFile = `/tmp/app-${slug}.zip`;
-      execSync(`curl -sfL "${artifactUrl}" -o "${tmpFile}"`, { timeout: 60000 });
+      execFileSync('curl', ['-sfL', artifactUrl, '-o', tmpFile], { timeout: 60000 });
       const tmpDir = `/tmp/app-${slug}-extract`;
-      execSync(`rm -rf "${tmpDir}" && mkdir -p "${tmpDir}" && unzip -qo "${tmpFile}" -d "${tmpDir}"`, { timeout: 30000 });
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+      fs.mkdirSync(tmpDir, { recursive: true });
+      execFileSync('unzip', ['-qo', tmpFile, '-d', tmpDir], { timeout: 30000 });
       const entries = fs.readdirSync(tmpDir);
       const src = entries.length === 1 && fs.statSync(path.join(tmpDir, entries[0])).isDirectory()
         ? path.join(tmpDir, entries[0]) : tmpDir;
-      execSync(`cp -a "${src}/." "${appDir}/"`, { timeout: 15000 });
-      execSync(`rm -rf "${tmpFile}" "${tmpDir}"`);
+      execFileSync('cp', ['-a', src + '/.', appDir + '/'], { timeout: 15000 });
+      try { fs.rmSync(tmpFile, { force: true }); } catch {}
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
     } else if (sourceUrl) {
-      execSync(`git clone --depth 1 "${sourceUrl}" "${appDir}" 2>/dev/null || (cd "${appDir}" && git pull)`, { timeout: 120000 });
+      if (fs.existsSync(path.join(appDir, '.git'))) {
+        execFileSync('git', ['pull'], { cwd: appDir, timeout: 120000 });
+      } else {
+        execFileSync('git', ['clone', '--depth', '1', sourceUrl, appDir], { timeout: 120000 });
+      }
     }
 
     // Run install.sh
     const installScript = path.join(appDir, 'scripts', 'install.sh');
     if (fs.existsSync(installScript)) {
-      execSync(`bash "${installScript}"`, { cwd: appDir, env: { ...process.env, APP_DIR: appDir, HOME: HOME_DIR }, timeout: 120000, stdio: 'inherit' });
+      execFileSync('bash', [installScript], { cwd: appDir, env: { ...process.env, APP_DIR: appDir, HOME: HOME_DIR }, timeout: 120000, stdio: 'inherit' });
     }
 
     // Install npm deps
     if (fs.existsSync(path.join(appDir, 'package.json')) && !fs.existsSync(path.join(appDir, 'node_modules'))) {
-      execSync('npm install --omit=dev --loglevel=error', { cwd: appDir, timeout: 60000 });
+      execFileSync('npm', ['install', '--omit=dev', '--loglevel=error'], { cwd: appDir, timeout: 60000 });
     }
 
     // Regenerate ecosystem + restart pm2
     const genScript = path.join(appDir, 'scripts', 'generate-ecosystem.sh');
     if (fs.existsSync(genScript)) {
-      execSync(`bash "${genScript}"`, { cwd: appDir, env: { ...process.env, APP_DIR: appDir, HOME: HOME_DIR }, timeout: 30000, stdio: 'inherit' });
+      execFileSync('bash', [genScript], { cwd: appDir, env: { ...process.env, APP_DIR: appDir, HOME: HOME_DIR }, timeout: 30000, stdio: 'inherit' });
     }
     const ecoFile = path.join(appDir, 'ecosystem.config.js');
     if (fs.existsSync(ecoFile)) {
-      execSync(`pm2 start "${ecoFile}" --update-env`, { timeout: 30000, stdio: 'inherit' });
+      execFileSync('pm2', ['start', ecoFile, '--update-env'], { timeout: 30000, stdio: 'inherit' });
     }
 
     if (ws.readyState === WebSocket.OPEN) {
@@ -567,15 +611,35 @@ async function handleInstallApp(ws, msg) {
 
 function handleUninstallApp(ws, msg) {
   const { id, slug, identifier } = msg;
+
+  // Validate slug to prevent path traversal and injection
+  if (!/^[a-zA-Z0-9_-]+$/.test(slug)) {
+    const errMsg = `Invalid app slug: ${slug}`;
+    console.error(`[bridge] ${errMsg}`);
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'uninstall_result', id, slug, status: 'error', error: errMsg }));
+    }
+    return;
+  }
+
+  if (identifier && !/^[a-zA-Z0-9._-]+$/.test(identifier)) {
+    const errMsg = `Invalid app identifier: ${identifier}`;
+    console.error(`[bridge] ${errMsg}`);
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'uninstall_result', id, slug, status: 'error', error: errMsg }));
+    }
+    return;
+  }
+
   const appDir = path.join(APPS_DIR, identifier || `com.xshopper.${slug}`);
   try {
     const uninstallScript = path.join(appDir, 'scripts', 'uninstall.sh');
     if (fs.existsSync(uninstallScript)) {
-      execSync(`bash "${uninstallScript}"`, { cwd: appDir, timeout: 30000, stdio: 'inherit' });
+      execFileSync('bash', [uninstallScript], { cwd: appDir, timeout: 30000, stdio: 'inherit' });
     }
-    try { execSync(`pm2 delete app-${slug}`, { timeout: 10000 }); } catch {}
-    try { execSync(`pm2 delete ${slug}`, { timeout: 10000 }); } catch {}
-    execSync(`rm -rf "${appDir}"`, { timeout: 10000 });
+    try { execFileSync('pm2', ['delete', `app-${slug}`], { timeout: 10000 }); } catch {}
+    try { execFileSync('pm2', ['delete', slug], { timeout: 10000 }); } catch {}
+    fs.rmSync(appDir, { recursive: true, force: true });
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'uninstall_result', id, slug, status: 'ok' }));
     }
