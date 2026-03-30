@@ -48,7 +48,47 @@ fi
 # ── 5. Set up pm2 startup hook (survives EC2 reboot) ─────────────────────────
 pm2 startup systemd -u root --hp /root 2>/dev/null || true
 
-# ── 6. Generate ecosystem.config.js ─────────────────────────────────────────
+# ── 6. Configure OpenClaw gateway (auth + controlUi for Docker/LAN mode) ────
+OC_DIR="$HOME/.openclaw"
+OC_CONFIG="$OC_DIR/openclaw.json"
+mkdir -p "$OC_DIR"
+if [ ! -f "$OC_CONFIG" ]; then
+  # First install — create config with password auth matching GW_PASSWORD
+  GW_PASS="${GW_PASSWORD:-$(openssl rand -hex 16)}"
+  node -e "
+    const fs = require('fs');
+    const cfg = {
+      gateway: {
+        mode: 'local',
+        auth: { mode: 'password', password: process.env.GW_PASSWORD || '$GW_PASS' },
+        controlUi: { dangerouslyAllowHostHeaderOriginFallback: true },
+      },
+    };
+    fs.writeFileSync('$OC_CONFIG', JSON.stringify(cfg, null, 2));
+    console.log('Created openclaw.json with password auth');
+  "
+else
+  # Existing config — ensure auth mode is password and controlUi is set
+  node -e "
+    const fs = require('fs');
+    const cfg = JSON.parse(fs.readFileSync('$OC_CONFIG', 'utf8'));
+    if (!cfg.gateway) cfg.gateway = {};
+    if (!cfg.gateway.auth) cfg.gateway.auth = {};
+    // Switch from token to password mode if GW_PASSWORD is set
+    if (process.env.GW_PASSWORD && cfg.gateway.auth.mode === 'token') {
+      cfg.gateway.auth.mode = 'password';
+      cfg.gateway.auth.password = process.env.GW_PASSWORD;
+      delete cfg.gateway.auth.token;
+      console.log('Switched gateway auth to password mode');
+    }
+    if (!cfg.gateway.controlUi) cfg.gateway.controlUi = {};
+    cfg.gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback = true;
+    fs.writeFileSync('$OC_CONFIG', JSON.stringify(cfg, null, 2));
+    console.log('Updated openclaw.json');
+  "
+fi
+
+# ── 7. Generate ecosystem.config.js ─────────────────────────────────────────
 bash "$APP_DIR/scripts/generate-ecosystem.sh"
 
 echo "=== OpenClaw mini app install complete ==="
