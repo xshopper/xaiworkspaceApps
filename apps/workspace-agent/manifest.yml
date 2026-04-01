@@ -1,6 +1,6 @@
 slug: workspace-agent
 identifier: com.xshopper.workspace-agent
-kind: system
+kind: app
 name: Workspace Agent
 description: WS bridge between the router and installed apps. Routes messages to app endpoints declared in manifests.
 icon: "\U0001F50C"
