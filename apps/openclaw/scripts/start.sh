@@ -19,7 +19,7 @@ if [ "${1:-}" = "restart" ]; then
 else
   echo "Starting all processes..."
   # Delete only our owned processes to avoid killing other mini apps (e.g. cliproxy)
-  pm2 delete openclaw bridge stunnel config-sync config-pull workspace-pull health-watchdog 2>/dev/null || true
+  pm2 delete openclaw bridge config-sync config-pull workspace-pull health-watchdog 2>/dev/null || true
   pm2 start "$ECO"
 fi
 

@@ -67,14 +67,6 @@ const apps = [
     max_memory_restart: "768M",
     kill_timeout: 5000,
   },
-  {
-    name: "stunnel",
-    script: "/usr/bin/stunnel",
-    args: "/etc/stunnel/openclaw.conf",
-    interpreter: "none",
-    autorestart: true,
-    restart_delay: 3000,
-  },
 ];
 
 if (HAS_INOTIFY) {

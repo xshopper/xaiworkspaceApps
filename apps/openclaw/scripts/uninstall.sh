@@ -4,7 +4,7 @@ set -euo pipefail
 
 echo "Stopping all processes..."
 # Delete each process individually — deleting all at once stops on first missing process
-for proc in openclaw stunnel config-sync config-pull workspace-pull health-watchdog; do
+for proc in openclaw config-sync config-pull workspace-pull health-watchdog; do
   pm2 delete "$proc" 2>/dev/null || true
 done
 pm2 save --force 2>/dev/null || true

@@ -46,7 +46,7 @@ persona:
   knowledge: |
     OpenClaw gateway listens on $PORT (default 19001).
     The workspace-agent handles the router bridge connection.
-    All processes managed by pm2: openclaw, stunnel, config-sync,
+    All processes managed by pm2: openclaw, config-sync,
     config-pull, workspace-pull, health-watchdog.
 
 permissions:
@@ -65,7 +65,7 @@ help: |
     `@openclaw logs`      — gateway log tail
 
 startup: "cd ~/apps/com.xshopper.openclaw && bash scripts/start.sh"
-cleanup: "for p in openclaw stunnel config-sync config-pull workspace-pull health-watchdog; do pm2 delete \"$p\" 2>/dev/null || true; done && pm2 save --force 2>/dev/null || true"
+cleanup: "for p in openclaw config-sync config-pull workspace-pull health-watchdog; do pm2 delete \"$p\" 2>/dev/null || true; done && pm2 save --force 2>/dev/null || true"
 
 model: claude-sonnet-4-6
 modelFallback: [claude-haiku-4-5-20251001]

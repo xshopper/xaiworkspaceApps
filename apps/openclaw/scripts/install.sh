@@ -39,16 +39,10 @@ if [ -f "$SECRETS_FILE" ]; then
   fi
 fi
 
-# ── 4. Install stunnel if missing ───────────────────────────────────────────
-if ! command -v stunnel &>/dev/null; then
-  echo "Installing stunnel..."
-  apt-get update -qq 2>/dev/null && apt-get install -y -qq stunnel4 2>/dev/null || echo "WARNING: stunnel install failed"
-fi
-
-# ── 5. Set up pm2 startup hook (survives EC2 reboot) ─────────────────────────
+# ── 4. Set up pm2 startup hook (survives EC2 reboot) ─────────────────────────
 pm2 startup systemd -u root --hp /root 2>/dev/null || true
 
-# ── 6. Configure OpenClaw gateway (auth + controlUi for Docker/LAN mode) ────
+# ── 5. Configure OpenClaw gateway (auth + controlUi for Docker/LAN mode) ────
 OC_DIR="$HOME/.openclaw"
 OC_CONFIG="$OC_DIR/openclaw.json"
 mkdir -p "$OC_DIR"
@@ -88,7 +82,7 @@ else
   "
 fi
 
-# ── 7. Generate ecosystem.config.js ─────────────────────────────────────────
+# ── 6. Generate ecosystem.config.js ─────────────────────────────────────────
 bash "$APP_DIR/scripts/generate-ecosystem.sh"
 
 echo "=== OpenClaw mini app install complete ==="
