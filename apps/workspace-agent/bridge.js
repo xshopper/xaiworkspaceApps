@@ -78,6 +78,7 @@ function backoff(attempt) {
 // ── Gateway discovery from manifests ────────────────────────────────────────
 
 let gateways = []; // [{ slug, port, protocol }]
+let activeGatewayPort = null; // port the active gatewayWs is connected to (null = not connected)
 
 function loadGateways() {
   const found = [];
@@ -87,7 +88,8 @@ function loadGateways() {
       const manifestPath = path.join(APPS_DIR, entry, 'manifest.yml');
       if (!fs.existsSync(manifestPath)) continue;
       try {
-        const raw = fs.readFileSync(manifestPath, 'utf8');
+        let raw = fs.readFileSync(manifestPath, 'utf8');
+        raw = raw.replace(/\r\n/g, '\n'); // normalize line endings for cross-platform manifests
         // Parse gateway block from YAML without js-yaml dependency.
         // Match "gateway:" as a top-level key, then extract port/protocol
         // from indented lines immediately following it (stop at next
@@ -233,6 +235,7 @@ function connectGateway() {
   if (gateways.length === 0) return;
 
   const gw = gateways[0]; // primary gateway
+  activeGatewayPort = gw.port;
   const wsUrl = `ws://127.0.0.1:${gw.port}`;
   console.log(`[workspace-agent] Connecting to gateway: ${gw.slug}@${wsUrl}`);
 
@@ -296,7 +299,7 @@ function connectGateway() {
   ws.on('close', (code) => {
     console.log(`[workspace-agent] Gateway WS closed: code=${code}`);
     gatewayAuthenticated = false;
-    if (gatewayWs === ws) gatewayWs = null;
+    if (gatewayWs === ws) { gatewayWs = null; activeGatewayPort = null; }
     scheduleGatewayReconnect();
   });
 
@@ -307,7 +310,7 @@ function connectGateway() {
       console.error(`[workspace-agent] Gateway WS error: ${err.message}`);
     }
     gatewayAuthenticated = false;
-    if (gatewayWs === ws) gatewayWs = null;
+    if (gatewayWs === ws) { gatewayWs = null; activeGatewayPort = null; }
     scheduleGatewayReconnect();
   });
 }
@@ -316,6 +319,34 @@ function scheduleGatewayReconnect() {
   if (gatewayReconnectTimer || shuttingDown) return;
   const delay = backoff(gatewayReconnectAttempt++);
   gatewayReconnectTimer = setTimeout(connectGateway, delay);
+}
+
+/**
+ * Re-scan manifests for gateway declarations and reconnect if the primary gateway
+ * port has changed (e.g. after an app reinstall) or if we are not currently connected.
+ */
+function refreshGatewayConnection() {
+  loadGateways();
+  if (shuttingDown) return;
+
+  if (gateways.length === 0) {
+    if (gatewayWs) { try { gatewayWs.close(); } catch {} }
+    return;
+  }
+
+  const newPort = gateways[0].port;
+
+  if (activeGatewayPort !== null && activeGatewayPort !== newPort) {
+    // Primary gateway port changed after install/reinstall — close stale connection.
+    // The close handler will call scheduleGatewayReconnect() which will pick up the new port.
+    console.log(`[workspace-agent] Gateway port changed (${activeGatewayPort} → ${newPort}), reconnecting`);
+    gatewayReconnectAttempt = 0; // reset backoff for intentional reconnect
+    if (gatewayWs) { try { gatewayWs.close(); } catch {} }
+  } else if (!gatewayWs || gatewayWs.readyState !== WebSocket.OPEN) {
+    // Not connected — connect immediately
+    if (gatewayReconnectTimer) { clearTimeout(gatewayReconnectTimer); gatewayReconnectTimer = null; }
+    connectGateway();
+  }
 }
 
 // ── Message forwarding ──────────────────────────────────────────────────────
@@ -415,7 +446,9 @@ function handleConfigUpdate(msg) {
     if (changed) {
       fs.writeFileSync(OC_CONFIG_PATH, JSON.stringify(config, null, 2) + '\n');
       console.log('[workspace-agent] openclaw.json updated from config_update');
-      try { execSync('pm2 restart openclaw --no-color', { timeout: 10000 }); } catch {}
+      try { execSync('pm2 restart openclaw --no-color', { timeout: 10000 }); } catch (e) {
+        console.warn('[workspace-agent] pm2 restart openclaw failed:', e.message);
+      }
     }
   } catch (err) {
     console.error(`[workspace-agent] Config update failed: ${err.message}`);
@@ -668,12 +701,8 @@ async function handleInstallApp(msg) {
     send({ type: 'install_result', id, slug, status: 'ok' });
     console.log(`[workspace-agent] App installed: ${slug}`);
 
-    // Re-scan gateways — the new app might declare one
-    const oldGateways = gateways.length;
-    loadGateways();
-    if (gateways.length > oldGateways && (!gatewayWs || gatewayWs.readyState !== WebSocket.OPEN)) {
-      connectGateway();
-    }
+    // Re-scan gateways and reconnect if port changed or a new gateway appeared
+    refreshGatewayConnection();
   } catch (err) {
     console.error(`[workspace-agent] Install failed for ${slug}:`, err.message);
     send({ type: 'install_result', id, slug, status: 'error', error: err.message });
@@ -712,6 +741,7 @@ function handleUninstallApp(msg) {
 
     try { execFileSync('pm2', ['delete', `app-${slug}`], { timeout: 10000 }); } catch {}
     try { execFileSync('pm2', ['delete', slug], { timeout: 10000 }); } catch {}
+    try { execFileSync('pm2', ['save', '--force'], { timeout: 5000 }); } catch {}
 
     // Clean up env vars
     try {
@@ -734,8 +764,8 @@ function handleUninstallApp(msg) {
     send({ type: 'uninstall_result', id, slug, status: 'ok' });
     console.log(`[workspace-agent] App uninstalled: ${slug}`);
 
-    // Re-scan gateways — the removed app might have had one
-    loadGateways();
+    // Re-scan gateways and disconnect if removed app had one
+    refreshGatewayConnection();
   } catch (err) {
     send({ type: 'uninstall_result', id, slug, status: 'error', error: err.message });
   }
@@ -833,7 +863,7 @@ function handleExec(msg) {
     return;
   }
 
-  if (/[;`]/.test(command)) {
+  if (/[;`|><]|\$\(/.test(command)) {
     console.warn('[workspace-agent] exec rejected: disallowed shell characters');
     send({ type: 'exec_result', id, code: -1, stdout: '', stderr: 'Command rejected: disallowed characters' });
     return;
@@ -896,12 +926,25 @@ function handleExec(msg) {
 
 function handleScan() {
   const apps = [];
+  const pm2Status = {};
+  try {
+    const list = execSync('pm2 jlist --no-color', { encoding: 'utf-8', timeout: 5000 });
+    for (const p of JSON.parse(list)) pm2Status[p.name] = p.pm2_env?.status || 'unknown';
+  } catch {}
   try {
     if (fs.existsSync(APPS_DIR)) {
       for (const entry of fs.readdirSync(APPS_DIR)) {
         const manifestPath = path.join(APPS_DIR, entry, 'manifest.yml');
         if (fs.existsSync(manifestPath)) {
-          apps.push({ name: entry, status: 'running', health: 'unknown' });
+          try {
+            const yaml = fs.readFileSync(manifestPath, 'utf8');
+            const slugMatch = yaml.match(/^slug:\s*['"]?([^\s'"]+)/m);
+            const slug = slugMatch ? slugMatch[1] : entry;
+            const status = pm2Status[slug] || pm2Status[entry] || 'stopped';
+            apps.push({ name: entry, slug, status, health: 'unknown' });
+          } catch {
+            apps.push({ name: entry, status: 'unknown', health: 'unknown' });
+          }
         }
       }
     }
