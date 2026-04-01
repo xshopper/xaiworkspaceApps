@@ -65,7 +65,7 @@ help: |
     `@openclaw logs`      — gateway log tail
 
 startup: "cd ~/apps/com.xshopper.openclaw && bash scripts/start.sh"
-cleanup: "pm2 delete openclaw stunnel config-sync config-pull workspace-pull health-watchdog 2>/dev/null || true"
+cleanup: "for p in openclaw stunnel config-sync config-pull workspace-pull health-watchdog; do pm2 delete \"$p\" 2>/dev/null || true; done && pm2 save --force 2>/dev/null || true"
 
 model: claude-sonnet-4-6
 modelFallback: [claude-haiku-4-5-20251001]
