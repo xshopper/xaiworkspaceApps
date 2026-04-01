@@ -2,7 +2,7 @@ slug: openclaw
 identifier: com.xshopper.openclaw
 kind: app
 name: OpenClaw Gateway
-description: AI gateway with WebSocket bridge — manages the core chat engine and router connection
+description: AI gateway — manages the core chat engine
 icon: "\U0001F9E0"
 version: 1.0.0
 
@@ -65,7 +65,7 @@ help: |
     `@openclaw logs`      — gateway log tail
 
 startup: "cd ~/apps/com.xshopper.openclaw && bash scripts/start.sh"
-cleanup: "pm2 delete openclaw bridge stunnel config-sync config-pull workspace-pull health-watchdog 2>/dev/null || true"
+cleanup: "pm2 delete openclaw stunnel config-sync config-pull workspace-pull health-watchdog 2>/dev/null || true"
 
 model: claude-sonnet-4-6
 modelFallback: [claude-haiku-4-5-20251001]

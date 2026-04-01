@@ -88,11 +88,15 @@ function loadGateways() {
       if (!fs.existsSync(manifestPath)) continue;
       try {
         const raw = fs.readFileSync(manifestPath, 'utf8');
-        // Parse gateway block from YAML without js-yaml dependency
-        const gwMatch = raw.match(/^gateway:\s*$/m);
-        if (!gwMatch) continue;
-        const portMatch = raw.match(/^\s+port:\s*(\d+)/m);
-        const protoMatch = raw.match(/^\s+protocol:\s*(\w+)/m);
+        // Parse gateway block from YAML without js-yaml dependency.
+        // Match "gateway:" as a top-level key, then extract port/protocol
+        // from indented lines immediately following it (stop at next
+        // non-indented line or EOF).
+        const gwBlockMatch = raw.match(/^gateway:\s*\n((?:[ \t]+.+\n?)*)/m);
+        if (!gwBlockMatch) continue;
+        const gwBlock = gwBlockMatch[1];
+        const portMatch = gwBlock.match(/^\s+port:\s*(\d+)/m);
+        const protoMatch = gwBlock.match(/^\s+protocol:\s*(\w+)/m);
         if (!portMatch) continue;
         const slugMatch = raw.match(/^slug:\s*['"]?([^\s'"]+)/m);
         found.push({
@@ -779,6 +783,9 @@ function handleListApps(msg) {
 
 // ── exec ────────────────────────────────────────────────────────────────────
 
+const MAX_CONCURRENT_EXEC = 5;
+let runningExec = 0;
+
 const EXEC_ALLOWLIST = [
   'node ',
   'pm2 ',
@@ -814,6 +821,12 @@ function handleExec(msg) {
     return;
   }
 
+  if (runningExec >= MAX_CONCURRENT_EXEC) {
+    console.warn(`[workspace-agent] exec rejected: ${runningExec} already running (max ${MAX_CONCURRENT_EXEC})`);
+    send({ type: 'exec_result', id, code: 1, stdout: '', stderr: `Too many concurrent exec requests (max ${MAX_CONCURRENT_EXEC})` });
+    return;
+  }
+
   if (!isCommandAllowed(command)) {
     console.warn(`[workspace-agent] exec rejected: not in allowlist: ${command.slice(0, 80)}`);
     send({ type: 'exec_result', id, code: -1, stdout: '', stderr: 'Command rejected: not in allowlist' });
@@ -836,6 +849,8 @@ function handleExec(msg) {
     return;
   }
 
+  runningExec++;
+
   const args = user
     ? ['sudo', ['-u', user, 'bash', '-c', command], { cwd: cwd || '/tmp' }]
     : ['bash', ['-c', command], { cwd: cwd || '/tmp' }];
@@ -843,16 +858,31 @@ function handleExec(msg) {
   console.log(`[workspace-agent] exec: ${command.slice(0, 60)}... (${command.length} bytes)`);
   const child = spawn(args[0], args[1], { ...args[2], detached: true, env: { ...process.env, HOME: `/home/${user || CLIENT_USER || 'workspace'}` } });
   let stdout = '', stderr = '';
+  let finished = false;
 
   child.stdout.on('data', d => { stdout += d; });
   child.stderr.on('data', d => { stderr += d; });
 
   child.on('close', code => {
+    if (finished) return;
+    finished = true;
+    runningExec--;
     clearTimeout(execTimeout);
     send({ type: 'exec_result', id, code, stdout: stdout.slice(-8192), stderr: stderr.slice(-8192) });
   });
 
+  child.on('error', (err) => {
+    if (finished) return;
+    finished = true;
+    runningExec--;
+    clearTimeout(execTimeout);
+    send({ type: 'exec_result', id, code: 1, stdout: '', stderr: err.message });
+  });
+
   const execTimeout = setTimeout(() => {
+    if (finished) return;
+    finished = true;
+    runningExec--;
     if (child.pid > 0) {
       try { process.kill(-child.pid, 'SIGKILL'); } catch {}
     } else {
