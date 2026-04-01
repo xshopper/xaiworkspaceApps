@@ -13,4 +13,5 @@ apps:
   - path: tools/google-sheets
   - path: tools/github-issues
   - path: apps/cliproxy
+  - path: apps/workspace-agent
   - path: apps/wello-world

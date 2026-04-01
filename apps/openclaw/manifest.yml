@@ -6,17 +6,20 @@ description: AI gateway with WebSocket bridge — manages the core chat engine a
 icon: "\U0001F9E0"
 version: 1.0.0
 
+gateway:
+  port: 19001
+  protocol: ws
+
 commands:
   status: "bash scripts/status.sh"
   start: "bash scripts/start.sh"
   stop: "bash scripts/stop.sh"
   restart: "bash scripts/start.sh restart"
   logs: "pm2 logs openclaw --lines 40 --nostream"
-  bridge-logs: "pm2 logs bridge --lines 40 --nostream"
 
 persona:
   soul: |
-    You manage the OpenClaw gateway and bridge processes.
+    You manage the OpenClaw gateway process.
     Always check status before making changes. Never guess — run the scripts.
   rules: |
     Scripts are at: ~/apps/com.xshopper.openclaw/scripts/
@@ -36,17 +39,14 @@ persona:
     @openclaw logs:
       Run: pm2 logs openclaw --lines 40 --nostream
 
-    @openclaw bridge-logs:
-      Run: pm2 logs bridge --lines 40 --nostream
-
     If not installed:
       Run: bash ~/apps/com.xshopper.openclaw/scripts/install.sh
 
     NEVER display API keys or tokens. Always show command output to user.
   knowledge: |
     OpenClaw gateway listens on $PORT (default 19001).
-    Bridge connects outbound to the router at wss://router/ws/gateway.
-    All processes managed by pm2: openclaw, bridge, stunnel, config-sync,
+    The workspace-agent handles the router bridge connection.
+    All processes managed by pm2: openclaw, stunnel, config-sync,
     config-pull, workspace-pull, health-watchdog.
 
 permissions:
@@ -55,15 +55,14 @@ permissions:
   network: [localhost:19001]
 
 help: |
-  Core AI gateway and router bridge.
+  Core AI gateway.
 
   **Commands:**
-    `@openclaw status`    — process health and bridge connection state
-    `@openclaw start`     — start gateway + bridge via pm2
+    `@openclaw status`    — process health
+    `@openclaw start`     — start gateway via pm2
     `@openclaw stop`      — stop all managed processes
     `@openclaw restart`   — restart all managed processes
     `@openclaw logs`      — gateway log tail
-    `@openclaw bridge-logs` — bridge log tail
 
 startup: "cd ~/apps/com.xshopper.openclaw && bash scripts/start.sh"
 cleanup: "pm2 delete openclaw bridge stunnel config-sync config-pull workspace-pull health-watchdog 2>/dev/null || true"

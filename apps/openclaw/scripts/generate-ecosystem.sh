@@ -68,18 +68,6 @@ const apps = [
     kill_timeout: 5000,
   },
   {
-    name: "bridge",
-    script: path.join(APP_DIR, "bridge.js"),
-    interpreter: "node",
-    cwd: APP_DIR,
-    uid: CLIENT_UID,
-    gid: CLIENT_GID,
-    autorestart: true,
-    max_restarts: 10,
-    restart_delay: 3000,
-    env: { NODE_OPTIONS: "--dns-result-order=ipv4first" },
-  },
-  {
     name: "stunnel",
     script: "/usr/bin/stunnel",
     args: "/etc/stunnel/openclaw.conf",
