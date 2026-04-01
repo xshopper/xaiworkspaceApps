@@ -131,7 +131,7 @@ apps.push(
 // Scan other installed mini apps for startup entries
 // Allowed: word chars, space, path chars, && for chaining, = : for flags, quotes
 // Blocked: newlines, $, backtick, ;, single |, >, <, (, ), {, }
-const SAFE_STARTUP_RE = /^[\w ./\-~&=:'"]+$/;
+const SAFE_STARTUP_RE = /^[\w ./\-~&=:\x27"]+$/;
 const appsDir = path.join(HOME, "apps");
 if (fs.existsSync(appsDir)) {
   for (const entry of fs.readdirSync(appsDir)) {
