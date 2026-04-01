@@ -21,9 +21,8 @@
 const AGENT_VERSION = '1.1.0';
 
 const http = require('http');
-const { execSync, execFileSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const { promisify } = require('util');
-const execAsync = promisify(require('child_process').exec);
 const execFileAsync = promisify(require('child_process').execFile);
 const { spawn } = require('child_process');
 const { randomUUID } = require('crypto');
@@ -448,7 +447,7 @@ function handleConfigUpdate(msg) {
     if (changed) {
       fs.writeFileSync(OC_CONFIG_PATH, JSON.stringify(config, null, 2) + '\n');
       console.log('[workspace-agent] openclaw.json updated from config_update');
-      try { execSync('pm2 restart openclaw --no-color', { timeout: 10000 }); } catch (e) {
+      try { execFileSync('pm2', ['restart', 'openclaw', '--no-color'], { timeout: 10000 }); } catch (e) {
         console.warn('[workspace-agent] pm2 restart openclaw failed:', e.message);
       }
     }
@@ -481,7 +480,7 @@ function readManifestVersion(slug) {
 
 function reportInstalledApps() {
   try {
-    const list = execSync('pm2 jlist --no-color', { encoding: 'utf-8', timeout: 5000 });
+    const list = execFileSync('pm2', ['jlist', '--no-color'], { encoding: 'utf-8', timeout: 5000 });
     const procs = JSON.parse(list);
     const systemProcs = new Set(['workspace-agent', 'bootstrap-bridge', 'bridge', 'updater']);
     const apps = procs
@@ -593,7 +592,7 @@ async function handleInstallApp(msg) {
           console.warn(`[workspace-agent] Skipping invalid env key: ${k}`);
           continue;
         }
-        const sanitized = String(v).replace(/[\n\r`$\\;|&"']/g, '');
+        const sanitized = String(v).replace(/[\n\r\0]/g, '');
         if (!new RegExp(`^${k}=`, 'm').test(existing)) {
           fs.appendFileSync(SECRETS_FILE, `${k}=${sanitized}\n`);
           addedKeys.push(k);
@@ -642,7 +641,9 @@ async function handleInstallApp(msg) {
         : tmpDir;
 
       if (subdir) {
-        const sub = path.join(src, subdir);
+        if (!/^[a-zA-Z0-9._/ -]+$/.test(subdir)) throw new Error('Invalid subdir path');
+        const sub = path.resolve(src, subdir);
+        if (!sub.startsWith(path.resolve(src) + path.sep)) throw new Error('Subdir escapes extract root');
         if (fs.existsSync(sub)) {
           src = sub;
           console.log('[workspace-agent] Using subdir: ' + subdir);
@@ -678,24 +679,24 @@ async function handleInstallApp(msg) {
     sendProgress(id, slug, 'installing', 50);
     const installScript = path.join(appDir, 'scripts', 'install.sh');
     if (fs.existsSync(installScript)) {
-      await execAsync(`bash "${installScript}"`, {
+      await execFileAsync('bash', [installScript], {
         cwd: appDir,
         env: { ...process.env, APP_DIR: appDir, HOME },
         timeout: 120000,
       });
     }
 
-    // 4. Install deps if package.json exists
+    // 4. Install deps if package.json exists (--ignore-scripts prevents postinstall RCE)
     const pkgJson = path.join(appDir, 'package.json');
     if (fs.existsSync(pkgJson) && !fs.existsSync(path.join(appDir, 'node_modules'))) {
-      await execAsync('pnpm install --prod --reporter=silent', { cwd: appDir, timeout: 120000 });
+      await execFileAsync('pnpm', ['install', '--prod', '--ignore-scripts', '--reporter=silent'], { cwd: appDir, timeout: 120000 });
     }
 
     // 5. Regenerate ecosystem and restart pm2
     sendProgress(id, slug, 'starting', 80);
     const genScript = path.join(appDir, 'scripts', 'generate-ecosystem.sh');
     if (fs.existsSync(genScript)) {
-      await execAsync(`bash "${genScript}"`, {
+      await execFileAsync('bash', [genScript], {
         cwd: appDir,
         env: { ...process.env, APP_DIR: appDir, HOME },
         timeout: 30000,
@@ -704,12 +705,12 @@ async function handleInstallApp(msg) {
 
     const ecoFile = path.join(appDir, 'ecosystem.config.js');
     if (fs.existsSync(ecoFile)) {
-      await execAsync(`pm2 start "${ecoFile}" --update-env`, { timeout: 30000 });
+      await execFileAsync('pm2', ['start', ecoFile, '--update-env'], { timeout: 30000 });
     } else if (manifest?.startup) {
       const startupCmd = manifest.startup;
       const eco = 'module.exports = { apps: [{ name: ' + JSON.stringify(slug) + ', script: "/bin/bash", args: ["-c", ' + JSON.stringify(startupCmd) + '], cwd: ' + JSON.stringify(appDir) + ', autorestart: true }] };';
       fs.writeFileSync(ecoFile, eco);
-      await execAsync(`pm2 start "${ecoFile}" --update-env`, { timeout: 30000 });
+      await execFileAsync('pm2', ['start', ecoFile, '--update-env'], { timeout: 30000 });
     }
 
     sendProgress(id, slug, 'complete', 100);
@@ -751,7 +752,7 @@ function handleUninstallApp(msg) {
   try {
     const uninstallScript = path.join(appDir, 'scripts', 'uninstall.sh');
     if (fs.existsSync(uninstallScript)) {
-      execSync(`bash "${uninstallScript}"`, { cwd: appDir, timeout: 30000, stdio: 'inherit' });
+      execFileSync('bash', [uninstallScript], { cwd: appDir, timeout: 30000, stdio: 'inherit' });
     }
 
     try { execFileSync('pm2', ['delete', `app-${slug}`], { timeout: 10000 }); } catch {}
@@ -766,6 +767,7 @@ function handleUninstallApp(msg) {
         if (keysToRemove.length > 0) {
           let secrets = fs.readFileSync(SECRETS_FILE, 'utf8');
           for (const key of keysToRemove) {
+            if (!VALID_ENV_KEY.test(key)) continue; // re-validate — .env-keys is attacker-controlled
             secrets = secrets.replace(new RegExp(`^${key}=.*\\n?`, 'm'), '');
             delete process.env[key];
           }
@@ -878,7 +880,7 @@ function handleExec(msg) {
     return;
   }
 
-  if (/[;`|><]|\$[\({]/.test(command)) {
+  if (/[;`|><&\n\r]|\$[\({]/.test(command)) {
     console.warn('[workspace-agent] exec rejected: disallowed shell characters');
     send({ type: 'exec_result', id, code: -1, stdout: '', stderr: 'Command rejected: disallowed characters' });
     return;
@@ -943,7 +945,7 @@ function handleScan() {
   const apps = [];
   const pm2Status = {};
   try {
-    const list = execSync('pm2 jlist --no-color', { encoding: 'utf-8', timeout: 5000 });
+    const list = execFileSync('pm2', ['jlist', '--no-color'], { encoding: 'utf-8', timeout: 5000 });
     for (const p of JSON.parse(list)) pm2Status[p.name] = p.pm2_env?.status || 'unknown';
   } catch {}
   try {
