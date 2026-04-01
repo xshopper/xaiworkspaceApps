@@ -35,7 +35,7 @@ const WebSocket = require('ws');
 const SECRETS_FILE = '/etc/openclaw/secrets.env';
 if (fs.existsSync(SECRETS_FILE)) {
   for (const line of fs.readFileSync(SECRETS_FILE, 'utf8').split('\n')) {
-    const m = line.match(/^([A-Z_]+)=(.*)$/);
+    const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
     if (m && !process.env[m[1]]) process.env[m[1]] = m[2];
   }
 }
@@ -108,7 +108,7 @@ function loadGateways() {
         });
       } catch (e) { console.warn(`[workspace-agent] Failed to parse manifest: ${manifestPath}`, e.message); }
     }
-  } catch {}
+  } catch (e) { console.warn('[workspace-agent] Failed to read apps dir:', e.message); }
   gateways = found;
   if (found.length > 0) {
     console.log('[workspace-agent] Discovered gateways:', found.map(g => `${g.slug}@${g.port}/${g.protocol}`).join(', '));
@@ -235,7 +235,6 @@ function connectGateway() {
   if (gateways.length === 0) return;
 
   const gw = gateways[0]; // primary gateway
-  activeGatewayPort = gw.port;
   const wsUrl = `ws://127.0.0.1:${gw.port}`;
   console.log(`[workspace-agent] Connecting to gateway: ${gw.slug}@${wsUrl}`);
 
@@ -275,6 +274,7 @@ function connectGateway() {
         gatewayAuthenticated = true;
         gatewayReconnectAttempt = 0;
         gatewayWs = ws;
+        activeGatewayPort = gw.port;
         console.log(`[workspace-agent] Gateway authenticated (${gw.slug})`);
         return;
       }
@@ -299,7 +299,8 @@ function connectGateway() {
   ws.on('close', (code) => {
     console.log(`[workspace-agent] Gateway WS closed: code=${code}`);
     gatewayAuthenticated = false;
-    if (gatewayWs === ws) { gatewayWs = null; activeGatewayPort = null; }
+    activeGatewayPort = null;
+    if (gatewayWs === ws) gatewayWs = null;
     scheduleGatewayReconnect();
   });
 
@@ -310,7 +311,8 @@ function connectGateway() {
       console.error(`[workspace-agent] Gateway WS error: ${err.message}`);
     }
     gatewayAuthenticated = false;
-    if (gatewayWs === ws) { gatewayWs = null; activeGatewayPort = null; }
+    activeGatewayPort = null;
+    if (gatewayWs === ws) gatewayWs = null;
     scheduleGatewayReconnect();
   });
 }
@@ -641,7 +643,7 @@ async function handleInstallApp(msg) {
         : tmpDir;
 
       if (subdir) {
-        if (!/^[a-zA-Z0-9._/ -]+$/.test(subdir)) throw new Error('Invalid subdir path');
+        if (!/^[a-zA-Z0-9._/-]+$/.test(subdir)) throw new Error('Invalid subdir path');
         const sub = path.resolve(src, subdir);
         if (!sub.startsWith(path.resolve(src) + path.sep)) throw new Error('Subdir escapes extract root');
         if (fs.existsSync(sub)) {
@@ -657,21 +659,17 @@ async function handleInstallApp(msg) {
       if (ghMatch) {
         const repoUrl = ghMatch[1] + '.git';
         const ghSubdir = ghMatch[3];
-        if (!/^[a-zA-Z0-9._/ -]+$/.test(ghSubdir)) {
+        if (!/^[a-zA-Z0-9._/-]+$/.test(ghSubdir)) {
           throw new Error('Invalid source subdir path');
         }
-        const tmpSparse = '/tmp/sparse-' + slug;
+        const tmpSparse = `/tmp/sparse-${slug}-${safeIdSuffix}`;
         await execFileAsync('rm', ['-rf', tmpSparse], { timeout: 5000 }).catch(() => {});
         await execFileAsync('git', ['clone', '--depth', '1', '--filter=blob:none', '--sparse', repoUrl, tmpSparse], { timeout: 120000 });
         await execFileAsync('git', ['-C', tmpSparse, 'sparse-checkout', 'set', ghSubdir], { timeout: 30000 });
         await execFileAsync('cp', ['-a', path.join(tmpSparse, ghSubdir) + '/.', appDir + '/'], { timeout: 15000 });
         await execFileAsync('rm', ['-rf', tmpSparse], { timeout: 5000 }).catch(() => {});
       } else {
-        try {
-          await execFileAsync('git', ['clone', '--depth', '1', sourceUrl, appDir], { timeout: 120000 });
-        } catch {
-          await execFileAsync('git', ['-C', appDir, 'pull'], { timeout: 120000 });
-        }
+        await execFileAsync('git', ['clone', '--depth', '1', sourceUrl, appDir], { timeout: 120000 });
       }
     }
 
@@ -707,10 +705,17 @@ async function handleInstallApp(msg) {
     if (fs.existsSync(ecoFile)) {
       await execFileAsync('pm2', ['start', ecoFile, '--update-env'], { timeout: 30000 });
     } else if (manifest?.startup) {
-      const startupCmd = manifest.startup;
-      const eco = 'module.exports = { apps: [{ name: ' + JSON.stringify(slug) + ', script: "/bin/bash", args: ["-c", ' + JSON.stringify(startupCmd) + '], cwd: ' + JSON.stringify(appDir) + ', autorestart: true }] };';
-      fs.writeFileSync(ecoFile, eco);
-      await execFileAsync('pm2', ['start', ecoFile, '--update-env'], { timeout: 30000 });
+      const startupCmd = String(manifest.startup).trim();
+      // Validate startup command — reject shell metacharacters (defense-in-depth)
+      if (startupCmd.length > MAX_COMMAND_LENGTH || /[;`|><&\n\r]|\$[\({]/.test(startupCmd)) {
+        console.warn(`[workspace-agent] Rejected unsafe manifest.startup for ${slug}: ${startupCmd.slice(0, 60)}`);
+      } else {
+        // Parse into script + args directly (no bash -c wrapper)
+        const startupParts = startupCmd.split(/\s+/);
+        const eco = 'module.exports = { apps: [{ name: ' + JSON.stringify(slug) + ', script: ' + JSON.stringify(startupParts[0]) + ', args: ' + JSON.stringify(startupParts.slice(1)) + ', cwd: ' + JSON.stringify(appDir) + ', autorestart: true }] };';
+        fs.writeFileSync(ecoFile, eco);
+        await execFileAsync('pm2', ['start', ecoFile, '--update-env'], { timeout: 30000 });
+      }
     }
 
     sendProgress(id, slug, 'complete', 100);
@@ -898,12 +903,16 @@ function handleExec(msg) {
 
   runningExec++;
 
-  const args = user
-    ? ['sudo', ['-u', user, 'bash', '-c', command], { cwd: cwd || '/tmp' }]
-    : ['bash', ['-c', command], { cwd: cwd || '/tmp' }];
+  // Parse command into binary + args — no shell interpretation
+  const parts = command.trim().split(/\s+/);
+  const binary = parts[0];
+  const cmdArgs = parts.slice(1);
+  const spawnOpts = { cwd: cwd || '/tmp', env: { ...process.env, HOME: `/home/${user || CLIENT_USER || 'workspace'}` } };
 
-  console.log(`[workspace-agent] exec: ${command.slice(0, 60)}... (${command.length} bytes)`);
-  const child = spawn(args[0], args[1], { ...args[2], detached: true, env: { ...process.env, HOME: `/home/${user || CLIENT_USER || 'workspace'}` } });
+  console.log(`[workspace-agent] exec: ${binary} ${cmdArgs.slice(0, 3).join(' ')}${cmdArgs.length > 3 ? '...' : ''} (${command.length} bytes)`);
+  const child = user
+    ? spawn('sudo', ['-u', user, binary, ...cmdArgs], spawnOpts)
+    : spawn(binary, cmdArgs, spawnOpts);
   let stdout = '', stderr = '';
   let finished = false;
 
@@ -930,11 +939,7 @@ function handleExec(msg) {
     if (finished) return;
     finished = true;
     runningExec--;
-    if (child.pid > 0) {
-      try { process.kill(-child.pid, 'SIGKILL'); } catch {}
-    } else {
-      try { child.kill('SIGKILL'); } catch {}
-    }
+    try { child.kill('SIGKILL'); } catch {}
     send({ type: 'exec_result', id, code: -1, stdout: stdout.slice(-8192), stderr: stderr.slice(-8192) + '\nTimeout (300s)' });
   }, 300_000);
 }
