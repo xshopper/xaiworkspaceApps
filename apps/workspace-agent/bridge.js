@@ -24,6 +24,7 @@ const http = require('http');
 const { execSync, execFileSync } = require('child_process');
 const { promisify } = require('util');
 const execAsync = promisify(require('child_process').exec);
+const execFileAsync = promisify(require('child_process').execFile);
 const { spawn } = require('child_process');
 const { randomUUID } = require('crypto');
 const fs = require('fs');
@@ -106,7 +107,7 @@ function loadGateways() {
           port: parseInt(portMatch[1], 10),
           protocol: protoMatch ? protoMatch[1] : 'ws',
         });
-      } catch {}
+      } catch (e) { console.warn(`[workspace-agent] Failed to parse manifest: ${manifestPath}`, e.message); }
     }
   } catch {}
   gateways = found;
@@ -340,7 +341,8 @@ function refreshGatewayConnection() {
     // Primary gateway port changed after install/reinstall — close stale connection.
     // The close handler will call scheduleGatewayReconnect() which will pick up the new port.
     console.log(`[workspace-agent] Gateway port changed (${activeGatewayPort} → ${newPort}), reconnecting`);
-    gatewayReconnectAttempt = 0; // reset backoff for intentional reconnect
+    gatewayReconnectAttempt = 0;
+    if (gatewayReconnectTimer) { clearTimeout(gatewayReconnectTimer); gatewayReconnectTimer = null; }
     if (gatewayWs) { try { gatewayWs.close(); } catch {} }
   } else if (!gatewayWs || gatewayWs.readyState !== WebSocket.OPEN) {
     // Not connected — connect immediately
@@ -592,7 +594,7 @@ async function handleInstallApp(msg) {
           continue;
         }
         const sanitized = String(v).replace(/[\n\r`$\\;|&"']/g, '');
-        if (!existing.includes(`${k}=`)) {
+        if (!new RegExp(`^${k}=`, 'm').test(existing)) {
           fs.appendFileSync(SECRETS_FILE, `${k}=${sanitized}\n`);
           addedKeys.push(k);
         }
@@ -608,9 +610,13 @@ async function handleInstallApp(msg) {
       fs.writeFileSync(path.join(appDir, '.env-keys'), addedKeys.join('\n'));
     }
 
+    // Sanitize id for safe use in temp file paths (strip non-alphanumeric chars)
+    const safeIdSuffix = (id || '').replace(/[^a-zA-Z0-9-]/g, '').slice(0, 8);
+
     if (artifactUrl) {
-      const tmpFile = `/tmp/app-${slug}-${(id || '').slice(0,8)}.zip`;
-      await execAsync(`curl -sfL "${artifactUrl}" -o "${tmpFile}"`, { timeout: 60000 });
+      const tmpFile = `/tmp/app-${slug}-${safeIdSuffix}.zip`;
+      // Use execFileAsync (no shell) to avoid injection via URL path/query
+      await execFileAsync('curl', ['-sfL', artifactUrl, '-o', tmpFile], { timeout: 60000 });
 
       if (msg.sha256) {
         const crypto = require('crypto');
@@ -625,8 +631,10 @@ async function handleInstallApp(msg) {
       }
 
       sendProgress(id, slug, 'extracting', 30);
-      const tmpDir = `/tmp/app-${slug}-${(id || '').slice(0,8)}-extract`;
-      await execAsync(`rm -rf "${tmpDir}" && mkdir -p "${tmpDir}" && unzip -qo "${tmpFile}" -d "${tmpDir}"`, { timeout: 30000 });
+      const tmpDir = `/tmp/app-${slug}-${safeIdSuffix}-extract`;
+      await execFileAsync('rm', ['-rf', tmpDir], { timeout: 5000 });
+      await execFileAsync('mkdir', ['-p', tmpDir], { timeout: 5000 });
+      await execFileAsync('unzip', ['-qo', tmpFile, '-d', tmpDir], { timeout: 30000 });
 
       const entries = fs.readdirSync(tmpDir);
       let src = entries.length === 1 && fs.statSync(path.join(tmpDir, entries[0])).isDirectory()
@@ -641,21 +649,28 @@ async function handleInstallApp(msg) {
         }
       }
 
-      await execAsync(`cp -a "${src}/." "${appDir}/"`, { timeout: 15000 });
-      await execAsync(`rm -rf "${tmpFile}" "${tmpDir}"`);
+      await execFileAsync('cp', ['-a', src + '/.', appDir + '/'], { timeout: 15000 });
+      await execFileAsync('rm', ['-rf', tmpFile, tmpDir], { timeout: 5000 }).catch(() => {});
     } else if (sourceUrl) {
       const ghMatch = sourceUrl.match(/^(https:\/\/github\.com\/[^/]+\/[^/]+)\/tree\/([^/]+)\/(.+)$/);
       if (ghMatch) {
         const repoUrl = ghMatch[1] + '.git';
         const ghSubdir = ghMatch[3];
+        if (!/^[a-zA-Z0-9._/ -]+$/.test(ghSubdir)) {
+          throw new Error('Invalid source subdir path');
+        }
         const tmpSparse = '/tmp/sparse-' + slug;
-        await execAsync('rm -rf ' + tmpSparse, { timeout: 5000 }).catch(() => {});
-        await execAsync('git clone --depth 1 --filter=blob:none --sparse "' + repoUrl + '" ' + tmpSparse, { timeout: 120000 });
-        await execAsync('cd ' + tmpSparse + ' && git sparse-checkout set "' + ghSubdir + '"', { timeout: 30000 });
-        await execAsync('cp -a ' + tmpSparse + '/' + ghSubdir + '/. ' + appDir + '/', { timeout: 15000 });
-        await execAsync('rm -rf ' + tmpSparse, { timeout: 5000 }).catch(() => {});
+        await execFileAsync('rm', ['-rf', tmpSparse], { timeout: 5000 }).catch(() => {});
+        await execFileAsync('git', ['clone', '--depth', '1', '--filter=blob:none', '--sparse', repoUrl, tmpSparse], { timeout: 120000 });
+        await execFileAsync('git', ['-C', tmpSparse, 'sparse-checkout', 'set', ghSubdir], { timeout: 30000 });
+        await execFileAsync('cp', ['-a', path.join(tmpSparse, ghSubdir) + '/.', appDir + '/'], { timeout: 15000 });
+        await execFileAsync('rm', ['-rf', tmpSparse], { timeout: 5000 }).catch(() => {});
       } else {
-        await execAsync(`git clone --depth 1 "${sourceUrl}" "${appDir}" 2>/dev/null || (cd "${appDir}" && git pull)`, { timeout: 120000 });
+        try {
+          await execFileAsync('git', ['clone', '--depth', '1', sourceUrl, appDir], { timeout: 120000 });
+        } catch {
+          await execFileAsync('git', ['-C', appDir, 'pull'], { timeout: 120000 });
+        }
       }
     }
 
@@ -863,7 +878,7 @@ function handleExec(msg) {
     return;
   }
 
-  if (/[;`|><]|\$\(/.test(command)) {
+  if (/[;`|><]|\$[\({]/.test(command)) {
     console.warn('[workspace-agent] exec rejected: disallowed shell characters');
     send({ type: 'exec_result', id, code: -1, stdout: '', stderr: 'Command rejected: disallowed characters' });
     return;
