@@ -519,6 +519,7 @@ const TRUSTED_DOMAINS = new Set([
   'registry.npmjs.org',
   'xaiworkspace.com',
   'router.xaiworkspace.com',
+  'apps.xaiworkspace.com',
 ]);
 
 function isUrlTrusted(url) {
