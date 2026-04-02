@@ -1,0 +1,93 @@
+slug: token-market
+identifier: com.xshopper.token-market
+kind: app
+name: Token Market
+description: Share and trade AI model API access via virtual keys — set pricing strategies, monitor health, track revenue
+icon: "\U0001F3EA"
+version: 0.1.0
+
+commands:
+  status: "bash scripts/status.sh"
+  browse: "bash scripts/browse.sh {args}"
+  list: "bash scripts/list.sh"
+  subscribe: "bash scripts/subscribe.sh {args}"
+  pricing: "bash scripts/pricing.sh {args}"
+  health: "bash scripts/health.sh"
+  revenue: "bash scripts/revenue.sh"
+  uninstall: "bash scripts/uninstall.sh"
+
+ui:
+  type: panel
+  title: Token Market
+
+persona:
+  soul: |
+    You manage the Token Market — a marketplace for sharing AI model API access.
+    Sellers list their BYO API keys/subscriptions as virtual keys that buyers can use.
+    Never expose real API keys. Always run scripts to check state before answering.
+  rules: |
+    Scripts are at: ~/apps/com.xshopper.token-market/scripts/
+
+    @token-market or @token-market status:
+      Run: bash ~/apps/com.xshopper.token-market/scripts/status.sh
+
+    @token-market browse [provider]:
+      Browse available models on the marketplace.
+      Run: bash ~/apps/com.xshopper.token-market/scripts/browse.sh [provider]
+
+    @token-market list:
+      Show the user's own listings.
+      Run: bash ~/apps/com.xshopper.token-market/scripts/list.sh
+
+    @token-market subscribe <listing-id>:
+      Subscribe to a listing and get a virtual key.
+      Run: bash ~/apps/com.xshopper.token-market/scripts/subscribe.sh <listing-id>
+
+    @token-market pricing [model]:
+      View or edit pricing strategies.
+      Run: bash ~/apps/com.xshopper.token-market/scripts/pricing.sh [model]
+
+    @token-market health:
+      Check health status of all listed keys.
+      Run: bash ~/apps/com.xshopper.token-market/scripts/health.sh
+
+    @token-market revenue:
+      Show revenue and expense summary.
+      Run: bash ~/apps/com.xshopper.token-market/scripts/revenue.sh
+
+    NEVER display real API keys. Virtual keys only.
+    Always show command output to user.
+  knowledge: |
+    The Token Market uses LiteLLM virtual keys so buyers never see real API keys.
+    Pricing strategies are user-defined JavaScript functions executed in V8 isolates.
+    Circuit breaker monitors key health: closed (ok) -> open (disabled) -> half_open (testing).
+    Revenue is logged per-call with seller margin and platform fee.
+
+permissions:
+  resources: [storage, database]
+  chat: [chat.send, chat.read, chat.listen]
+  network: [localhost:3460, localhost:4001]
+
+help: |
+  Share and trade AI model API access via virtual keys.
+
+  **Commands:**
+    `@token-market status`                — marketplace overview
+    `@token-market browse [provider]`     — browse available models
+    `@token-market list`                  — your listings
+    `@token-market subscribe <id>`        — subscribe to a listing
+    `@token-market pricing [model]`       — view/edit pricing strategies
+    `@token-market health`                — key health & circuit breaker status
+    `@token-market revenue`               — revenue & expense summary
+    `@token-market uninstall`             — uninstall Token Market
+
+configurable: true
+startup: "cd ~/apps/com.xshopper.token-market && node server.js"
+cleanup: "pm2 delete token-market-server 2>/dev/null || pkill -u \"$(id -u)\" -f 'token-market/server.js' 2>/dev/null || true"
+
+port: 3460
+model: claude-sonnet-4-6
+modelFallback: [claude-haiku-4-5-20251001]
+sandbox: strict
+
+dependencies: [cliproxy]

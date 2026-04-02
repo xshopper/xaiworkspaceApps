@@ -16,6 +16,7 @@ for test in "$DIR"/validate-manifests.sh "$DIR"/test-*.sh; do
   NAME=$(basename "$test" .sh)
   echo ">>> Running: $NAME"
   if bash "$test"; then
+    TOTAL_PASS=$((TOTAL_PASS + 1))
     echo ""
   else
     TOTAL_FAIL=$((TOTAL_FAIL + 1))
@@ -25,9 +26,9 @@ done
 
 echo "============================================="
 if [ "$TOTAL_FAIL" -eq 0 ]; then
-  printf "\033[32mAll test suites passed.\033[0m\n"
+  printf "\033[32mAll %d test suite(s) passed.\033[0m\n" "$TOTAL_PASS"
 else
-  printf "\033[31m%d test suite(s) had failures.\033[0m\n" "$TOTAL_FAIL"
+  printf "\033[31m%d passed, %d failed.\033[0m\n" "$TOTAL_PASS" "$TOTAL_FAIL"
 fi
 echo "============================================="
 [ "$TOTAL_FAIL" -eq 0 ] && exit 0 || exit 1

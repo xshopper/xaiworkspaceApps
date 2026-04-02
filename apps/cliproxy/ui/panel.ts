@@ -1,5 +1,5 @@
 import type { PanelState, ProviderDef } from './types';
-import { getModels, deriveStatus, groupProviders, getTokenStatus, updateToken, disconnectProvider, connectProvider, startCliOAuth, pollCliOAuth } from './api';
+import { getModels, deriveStatus, groupProviders, getTokenStatus, updateToken, disconnectProvider, connectApiKeyProvider, connectProviderChat, startCliOAuth, pollCliOAuth } from './api';
 
 // ---------------------------------------------------------------------------
 // Provider definitions for the connect form
@@ -153,7 +153,7 @@ function handleDisconnect(providerName: string) {
   setTimeout(loadData, 4000);
 }
 
-function handleConnect() {
+async function handleConnect() {
   if (!selectedProviderId) return;
 
   const def = PROVIDERS.find(p => p.id === selectedProviderId);
@@ -163,21 +163,36 @@ function handleConnect() {
     const key = apiKeyDraft.trim();
     if (!key) { state.error = 'Please enter an API key'; state.success = null; render(); return; }
     connecting = true;
+    state.error = null;
     render();
-    connectProvider(selectedProviderId, key);
-    showSuccess(`Submitting API key... Refreshing in a few seconds.`);
-    // Defer form reset until after loadData confirms the state
+
     const submittedProvider = selectedProviderId;
-    setTimeout(async () => {
-      connecting = false;
-      await loadData();
-      // Reset form only if the provider now appears in the connected list
-      if (state.providers.some(p => p.name === submittedProvider)) {
-        selectedProviderId = '';
+    try {
+      const result = await connectApiKeyProvider(submittedProvider, key);
+      if (result.ok) {
+        showSuccess(`${def.label} API key configured. Refreshing models...`);
         apiKeyDraft = '';
+        // Give CLIProxyAPI a moment to discover new models
+        setTimeout(async () => {
+          connecting = false;
+          await loadData();
+          if (state.providers.some(p => p.name === submittedProvider)) {
+            selectedProviderId = '';
+          }
+          render();
+        }, 3000);
+      } else {
+        connecting = false;
+        state.error = result.error ?? `Failed to set API key for ${def.label}`;
+        state.success = null;
+        render();
       }
+    } catch (err: any) {
+      connecting = false;
+      state.error = err?.message ?? `Could not reach CLIProxyAPI to set ${def.label} key`;
+      state.success = null;
       render();
-    }, 4000);
+    }
   } else {
     // CLI subscription — start OAuth via CLIProxyAPI or chat
     handleOAuthConnect(selectedProviderId, def.label).catch(err => {
@@ -212,7 +227,7 @@ async function handleOAuthConnect(providerId: string, label: string) {
     if (!/^https?:\/\//i.test(authUrl)) {
       oauthState = null;
       oauthConnecting = false;
-      connectProvider(providerId);
+      connectProviderChat(providerId);
       showSuccess(`Connecting ${label}... Check chat for auth instructions.`);
       render();
       return;
@@ -285,7 +300,7 @@ async function handleOAuthConnect(providerId: string, label: string) {
   } else {
     // Fallback: use chat command
     oauthConnecting = false;
-    connectProvider(providerId);
+    connectProviderChat(providerId);
     showSuccess(`Connecting ${label}... Check chat for auth instructions.`);
   }
   render();

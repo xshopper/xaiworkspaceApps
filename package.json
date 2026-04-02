@@ -10,7 +10,8 @@
     "test": "jest --runInBand",
     "test:smoke": "jest --runInBand e2e/smoke.spec.ts",
     "test:openclaw": "jest --runInBand e2e/openclaw.spec.ts",
-    "build:cliproxy": "esbuild apps/cliproxy/ui/panel.ts --bundle --format=iife --outfile=apps/cliproxy/ui/panel.js"
+    "build:cliproxy": "esbuild apps/cliproxy/ui/panel.ts --bundle --format=iife --outfile=apps/cliproxy/ui/panel.js",
+    "e2e:claude-code": "npx playwright test claude-code-panel --config playwright.config.ts"
   },
   "repository": {
     "type": "git",
@@ -25,6 +26,7 @@
   },
   "homepage": "https://github.com/xshopper/xaiworkspaceApps#readme",
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/jest": "^30.0.0",
     "jest": "^30.3.0",
     "puppeteer-core": "^24.39.0",

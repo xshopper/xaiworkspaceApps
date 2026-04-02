@@ -13,7 +13,7 @@
 // Management messages (install_app, uninstall_app, exec, etc.) are handled
 // directly by the agent — they never reach the app gateway.
 //
-// Environment (from /etc/openclaw/secrets.env):
+// Environment (from /etc/xai/secrets.env):
 //   ROUTER_URL, INSTANCE_ID, INSTANCE_TOKEN, CHAT_ID, PORT, GW_PASSWORD
 // ─────────────────────────────────────────────────────────────────────────────
 'use strict';
@@ -32,7 +32,7 @@ const WebSocket = require('ws');
 
 // ── Load secrets from env file ──────────────────────────────────────────────
 
-const SECRETS_FILE = '/etc/openclaw/secrets.env';
+const SECRETS_FILE = '/etc/xai/secrets.env';
 if (fs.existsSync(SECRETS_FILE)) {
   for (const line of fs.readFileSync(SECRETS_FILE, 'utf8').split('\n')) {
     const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);

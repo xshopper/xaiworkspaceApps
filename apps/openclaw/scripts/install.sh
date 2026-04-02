@@ -22,7 +22,7 @@ if [ ! -d "$APP_DIR/node_modules/ws" ] || [ ! -d "$APP_DIR/node_modules/js-yaml"
 fi
 
 # ── 3. Persist bridge env vars to secrets.env (if not already present) ───────
-SECRETS_FILE="/etc/openclaw/secrets.env"
+SECRETS_FILE="/etc/xai/secrets.env"
 if [ -f "$SECRETS_FILE" ]; then
   # Add INSTANCE_ID if available and not already in file
   if [ -n "${INSTANCE_ID:-}" ] && ! grep -q '^INSTANCE_ID=' "$SECRETS_FILE" 2>/dev/null; then

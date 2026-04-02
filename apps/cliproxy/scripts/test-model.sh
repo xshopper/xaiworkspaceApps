@@ -11,7 +11,7 @@ fi
 RESULT=$(curl -sf -X POST http://localhost:4001/v1/chat/completions \
   -H "Authorization: Bearer local-only" \
   -H "Content-Type: application/json" \
-  -d "{\"model\":\"${MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":1}" \
+  -d "$(jq -n --arg m "$MODEL" '{model: $m, messages: [{role: "user", content: "hi"}], max_tokens: 1}')" \
   --max-time 15 2>&1 || echo "FAIL")
 if echo "$RESULT" | jq -e '.choices[0]' >/dev/null 2>&1; then
   echo "OK ${MODEL}"

@@ -22,7 +22,7 @@ assert() {
   fi
 }
 
-VALID_KINDS="app agent skill tool plugin"
+VALID_KINDS="app agent skill tool plugin mcp"
 VALID_MODELS="claude-opus-4-6 claude-sonnet-4-6 claude-haiku-4-5-20251001"
 VALID_SANDBOX="strict relaxed none"
 VALID_TRIGGER_KINDS="cron event webhook watch"
@@ -174,6 +174,56 @@ print(','.join(bad))
     else
       assert "trigger kinds are valid (invalid: $BAD_TRIGGERS)" "false"
     fi
+  fi
+
+  # Validate startup and cleanup fields (max 500 chars, no dangerous patterns)
+  STARTUP_CLEANUP_ERRORS=$(python3 -c "
+import yaml, re
+with open('$manifest') as f:
+    m = yaml.safe_load(f)
+errors = []
+for field in ('startup', 'cleanup'):
+    val = m.get(field)
+    if val is None:
+        continue
+    if not isinstance(val, str):
+        errors.append(f'{field} must be a string')
+        continue
+    if len(val) > 500:
+        errors.append(f'{field} exceeds 500 chars ({len(val)})')
+    # startup has stricter shell restrictions than cleanup
+    if field == 'startup':
+        if re.search(r'\\\$\(', val):
+            errors.append(f'{field} contains dangerous \\\$() pattern')
+        if chr(96) in val:
+            errors.append(f'{field} contains dangerous backtick')
+        if re.search(r'\\beval\\b', val):
+            errors.append(f'{field} contains dangerous eval')
+print(','.join(errors))
+" 2>/dev/null)
+  if [ -z "$STARTUP_CLEANUP_ERRORS" ]; then
+    assert "startup/cleanup fields are safe" "true"
+  else
+    assert "startup/cleanup fields are safe ($STARTUP_CLEANUP_ERRORS)" "false"
+  fi
+
+  # Validate commands keys are valid identifiers
+  COMMANDS_ERRORS=$(python3 -c "
+import yaml, re
+with open('$manifest') as f:
+    m = yaml.safe_load(f)
+cmds = m.get('commands')
+if cmds is None or not isinstance(cmds, dict):
+    pass
+else:
+    bad = [k for k in cmds if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_-]*$', str(k))]
+    if bad:
+        print(','.join(bad))
+" 2>/dev/null)
+  if [ -z "$COMMANDS_ERRORS" ]; then
+    assert "commands keys are valid identifiers" "true"
+  else
+    assert "commands keys are valid identifiers (invalid: $COMMANDS_ERRORS)" "false"
   fi
 
   # Kind-specific checks

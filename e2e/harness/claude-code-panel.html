@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Code Panel — Test Harness</title>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #0a0a0a; }
+  </style>
+</head>
+<body>
+<script>
+/**
+ * xai SDK mock — mimics the sandbox iframe environment.
+ *
+ * Tests control behaviour by setting window.__mockHttpHandler before
+ * triggering the ready event.
+ *
+ * window.__xaiChatMessages collects chat.send() calls.
+ * window.__xaiHttpCalls    collects every xai.http() invocation.
+ * window.__xaiRendered     stores the last HTML string passed to xai.render().
+ */
+
+window.__xaiChatMessages = [];
+window.__xaiHttpCalls     = [];
+window.__xaiRendered       = '';
+window.__xaiEventHandlers  = {};
+window.__mockHttpHandler   = null; // function(url, opts?) => { data } | throw
+
+const xai = {
+  render(html) {
+    window.__xaiRendered = html;
+    document.body.innerHTML = html;
+  },
+
+  async http(url, opts) {
+    window.__xaiHttpCalls.push({ url, opts });
+
+    if (typeof window.__mockHttpHandler === 'function') {
+      return window.__mockHttpHandler(url, opts);
+    }
+
+    // Default: simulate unreachable server
+    throw new Error('Connection refused');
+  },
+
+  on(event, handler) {
+    if (!window.__xaiEventHandlers[event]) {
+      window.__xaiEventHandlers[event] = [];
+    }
+    window.__xaiEventHandlers[event].push(handler);
+  },
+
+  chat: {
+    send(text) {
+      window.__xaiChatMessages.push(text);
+    },
+  },
+};
+
+window.xai = xai;
+
+// Helper: fire a registered event
+window.__fireXaiEvent = function (event, data) {
+  const handlers = window.__xaiEventHandlers[event] || [];
+  handlers.forEach(fn => fn(data));
+};
+</script>
+
+<!-- Load the real panel.js after the mock is in place -->
+<script src="/panel.js"></script>
+
+</body>
+</html>

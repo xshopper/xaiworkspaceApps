@@ -23,11 +23,11 @@ else
     # Fallback: download from GitHub (for dev/manual installs without bundled binary)
     echo "No bundled binary found, downloading from GitHub..."
     FALLBACK_VERSION="6.9.2"
-    AUTH_HEADER=""
+    CURL_ARGS=(-sL)
     if [ -n "${GITHUB_TOKEN:-}" ]; then
-      AUTH_HEADER="-H \"Authorization: Bearer ${GITHUB_TOKEN}\""
+      CURL_ARGS+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
     fi
-    TAG=$(eval curl -sL ${AUTH_HEADER} https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest | jq -r '.tag_name // empty')
+    TAG=$(curl "${CURL_ARGS[@]}" https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest | jq -r '.tag_name // empty')
     if [ -z "$TAG" ]; then
       TAG="v${FALLBACK_VERSION}"
     fi

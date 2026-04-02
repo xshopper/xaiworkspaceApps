@@ -175,8 +175,9 @@ RESPONSE
     exit 0
   fi
 
-  # Normalize: strip protocol prefix if present
+  # Normalize: strip protocol prefix and path if present
   HOST_PORT=$(echo "$HOST_PORT" | sed 's|^https\?://||')
+  HOST_PORT="${HOST_PORT%%/*}"
 
   # Validate HOST_PORT — only allow known local hostnames or literal private IPs (prevent SSRF)
   HOST="${HOST_PORT%%:*}"

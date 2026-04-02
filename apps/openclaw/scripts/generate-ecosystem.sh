@@ -2,7 +2,7 @@
 set -euo pipefail
 # generate-ecosystem.sh — Generate pm2 ecosystem.config.js from runtime environment
 #
-# Reads: /etc/openclaw/secrets.env (written by cloud-init)
+# Reads: /etc/xai/secrets.env (written by cloud-init)
 # Writes: ~/apps/com.xshopper.openclaw/ecosystem.config.js
 #
 # Uses Node.js for JSON serialization to prevent code injection from manifest values.
@@ -10,7 +10,7 @@ set -euo pipefail
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 # Source secrets for environment values
-[ -f /etc/openclaw/secrets.env ] && set -a && source /etc/openclaw/secrets.env && set +a
+[ -f /etc/xai/secrets.env ] && set -a && source /etc/xai/secrets.env && set +a
 
 : "${PORT:=19001}"
 : "${CHAT_ID:=unknown}"
@@ -119,6 +119,10 @@ if (fs.existsSync(appsDir)) {
     if (!fs.existsSync(manifestPath)) continue;
     const appDir = path.join(appsDir, entry);
     if (appDir === APP_DIR) continue; // skip ourselves
+    // Skip workspace-agent — it is managed by the bootstrap ecosystem (/opt/bootstrap/)
+    // and its startup command (pm2 restart) would cause a self-kill loop
+    const dirName = path.basename(appDir);
+    if (dirName === "com.xshopper.workspace-agent" || dirName === "workspace-agent") continue;
 
     let manifest;
     try {

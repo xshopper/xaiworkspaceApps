@@ -2,7 +2,7 @@
 # status.sh — Show status of all OpenClaw managed processes
 # No set -euo pipefail: status checks use || fallbacks intentionally
 
-[ -f /etc/openclaw/secrets.env ] && set -a && source /etc/openclaw/secrets.env && set +a
+[ -f /etc/xai/secrets.env ] && set -a && source /etc/xai/secrets.env && set +a
 
 echo "=== OpenClaw Process Status ==="
 pm2 list --no-color 2>/dev/null || echo "pm2 not running"

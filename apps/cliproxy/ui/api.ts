@@ -64,15 +64,30 @@ export function disconnectProvider(name: string): void {
   xai.chat.send(`@cliproxy disconnect ${name}`);
 }
 
-/** Connect a provider via chat command */
-export function connectProvider(providerId: string, apiKey?: string): void {
-  if (apiKey) {
-    xai.chat.send(`@cliproxy connect ${providerId}`, [
-      [{ text: apiKey, data: `api-key:${apiKey}` }],
-    ]);
-  } else {
-    xai.chat.send(`@cliproxy connect ${providerId}`);
-  }
+/**
+ * Connect an API-key provider by setting the key directly via the admin
+ * endpoint (same as `updateToken`).  Returns the endpoint response so the
+ * caller can report success/failure.  The raw key never travels through a
+ * chat message.
+ */
+export async function connectApiKeyProvider(
+  providerId: string,
+  apiKey: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await xai.http<{ ok: boolean; error?: string }>(
+    `${BASE}/admin/token`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: providerId, access_token: apiKey }),
+    },
+  );
+  return res.data;
+}
+
+/** Start a CLI-subscription or legacy connect flow via chat command */
+export function connectProviderChat(providerId: string): void {
+  xai.chat.send(`@cliproxy connect ${providerId}`);
 }
 
 // ── CLIProxy OAuth (via router backend) ──────────────────────────────────

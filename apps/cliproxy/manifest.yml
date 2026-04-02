@@ -93,6 +93,7 @@ help: |
     `@cliproxy setkey <provider> <key>`   — register an API key
     `@cliproxy models`                    — list available models
     `@cliproxy disconnect <name>`         — remove a provider
+    `@cliproxy uninstall`                 — uninstall CLI Proxy
 configurable: true
 startup: "cd ~/apps/com.xshopper.cliproxy && ./bin/cli-proxy-api --config config.yaml"
 cleanup: "pkill -u \"$(id -u)\" -f 'cli-proxy-api --config' 2>/dev/null || true"

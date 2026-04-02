@@ -112,10 +112,12 @@ These fields apply to all five kinds.
 | `entrypoint` | string | Inline JavaScript executed inside the sandbox for programmatic components |
 | `ui` | object | UI panel configuration. When present, the platform renders the app in a side panel alongside chat |
 | `startup` | string | Shell command to run the app on EC2 boot. Registered as a pm2 process by the openclaw ecosystem generator. Blocked chars: `$`, `;`, `\|`, `` ` ``, `>`, `<` (standalone `&` blocked, `&&` allowed). Max 500 chars |
-| `cleanup` | string | Shell command to stop/remove the app's processes (run on uninstall or app stop) |
+| `cleanup` | string | Shell command to stop/remove the app's processes (run on uninstall or app stop). Max 500 chars |
 | `port` | integer | Network port the app listens on. Conflicts checked against other apps and reserved ports (22, 19001, 19443). Sets `APP_PORT` env var |
 | `configurable` | boolean | Whether the app has user-editable configuration |
 | `authProvider` | string | OAuth provider name for MCP servers (lowercase alphanumeric). Router injects OAuth tokens per-call |
+| `commands` | object | Map of command names to shell commands. Keys must be valid identifiers (`/^[a-zA-Z_][a-zA-Z0-9_-]*$/`, kebab-case allowed). Values are shell command strings; use `{args}` as a placeholder for user-provided arguments. Commands are executed directly by the platform (manifest-driven exec, no AI model needed) |
+| `help` | string | Multi-line Markdown help text shown when the user types `@<slug> help`. Document available commands and usage examples here |
 
 ### Skill-Specific Fields
 

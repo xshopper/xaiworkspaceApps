@@ -1,0 +1,89 @@
+slug: claude-code
+identifier: com.xshopper.claude-code
+kind: app
+name: Claude Code
+description: AI coding assistant — runs Claude Code in your workspace container with full file, bash, and tool access
+icon: "\U0001F4BB"
+version: 1.0.0
+
+port: 3457
+
+commands:
+  status: "bash scripts/status.sh"
+  start: "bash scripts/start.sh"
+  stop: "bash scripts/stop.sh"
+  restart: "bash scripts/start.sh restart"
+  logs: "pm2 logs claude-code-server --lines 40 --nostream"
+
+ui:
+  type: panel
+  title: Claude Code
+
+persona:
+  soul: |
+    You manage the Claude Code process.
+    Always check status before making changes. Never guess — run the scripts.
+  rules: |
+    Scripts are at: ~/apps/com.xshopper.claude-code/scripts/
+
+    @claude-code or @claude-code status:
+      Run: bash ~/apps/com.xshopper.claude-code/scripts/status.sh
+
+    @claude-code start:
+      Run: bash ~/apps/com.xshopper.claude-code/scripts/start.sh
+
+    @claude-code stop:
+      Run: bash ~/apps/com.xshopper.claude-code/scripts/stop.sh
+
+    @claude-code restart:
+      Run: bash ~/apps/com.xshopper.claude-code/scripts/start.sh restart
+
+    @claude-code logs:
+      Run: pm2 logs claude-code-server --lines 40 --nostream
+
+    If not installed:
+      Run: bash ~/apps/com.xshopper.claude-code/scripts/install.sh
+
+    For interactive prompts (e.g. "@claude-code fix the auth bug"):
+      The user's panel handles these via the server API. Just confirm the request
+      was sent to the Claude Code server and let the panel display results.
+
+    NEVER display API keys or tokens. Always show command output to user.
+  knowledge: |
+    Claude Code server listens on port 3457.
+    It uses @anthropic-ai/claude-agent-sdk to run Claude Code sessions.
+    Built-in tools: Read, Write, Edit, Bash, Glob, Grep.
+    Sessions persist across queries. Use /sessions to list them.
+    Requires ANTHROPIC_API_KEY in the container environment.
+
+permissions:
+  resources: [storage]
+  chat: [chat.send, chat.read, chat.listen]
+  network: [localhost:3457]
+
+help: |
+  AI coding assistant. Claude Code runs in your workspace container
+  with full file, bash, and tool access.
+
+  **Management commands:**
+    `@claude-code status`     — process health + Claude CLI check
+    `@claude-code start`      — start the server
+    `@claude-code stop`       — stop the server
+    `@claude-code restart`    — restart the server
+    `@claude-code logs`       — server log tail
+
+  **Interactive (via panel or chat):**
+    `@claude-code fix the login bug in auth.ts`
+    `@claude-code explain this codebase`
+    `@claude-code run the test suite and fix failures`
+
+  **Requires:**
+    ANTHROPIC_API_KEY environment variable set in the container.
+
+configurable: true
+startup: "cd ~/apps/com.xshopper.claude-code && bash scripts/start.sh"
+cleanup: "pm2 delete claude-code-server 2>/dev/null || true"
+
+model: claude-sonnet-4-6
+modelFallback: [claude-haiku-4-5-20251001]
+sandbox: relaxed

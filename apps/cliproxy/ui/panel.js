@@ -53,14 +53,16 @@
   function disconnectProvider(name) {
     xai.chat.send(`@cliproxy disconnect ${name}`);
   }
-  function connectProvider(providerId, apiKey) {
-    if (apiKey) {
-      xai.chat.send(`@cliproxy connect ${providerId}`, [
-        [{ text: apiKey, data: `api-key:${apiKey}` }]
-      ]);
-    } else {
-      xai.chat.send(`@cliproxy connect ${providerId}`);
-    }
+  async function connectApiKeyProvider(providerId, apiKey) {
+    const res = await xai.http(`${BASE}/admin/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: providerId, access_token: apiKey })
+    });
+    return res.data;
+  }
+  function connectProviderChat(providerId) {
+    xai.chat.send(`@cliproxy connect ${providerId}`);
   }
   async function startCliOAuth(provider) {
     try {
@@ -207,7 +209,7 @@
         showSuccess(`Disconnect request sent for ${label}. Refreshing...`);
         setTimeout(loadData, 4e3);
       }
-      function handleConnect() {
+      async function handleConnect() {
         if (!selectedProviderId) return;
         const def = PROVIDERS.find((p) => p.id === selectedProviderId);
         if (!def) return;
@@ -220,19 +222,34 @@
             return;
           }
           connecting = true;
+          state.error = null;
           render();
-          connectProvider(selectedProviderId, key);
-          showSuccess(`Submitting API key... Refreshing in a few seconds.`);
           const submittedProvider = selectedProviderId;
-          setTimeout(async () => {
-            connecting = false;
-            await loadData();
-            if (state.providers.some((p) => p.name === submittedProvider)) {
-              selectedProviderId = "";
+          try {
+            const result = await connectApiKeyProvider(submittedProvider, key);
+            if (result.ok) {
+              showSuccess(`${def.label} API key configured. Refreshing models...`);
               apiKeyDraft = "";
+              setTimeout(async () => {
+                connecting = false;
+                await loadData();
+                if (state.providers.some((p) => p.name === submittedProvider)) {
+                  selectedProviderId = "";
+                }
+                render();
+              }, 3e3);
+            } else {
+              connecting = false;
+              state.error = result.error ?? `Failed to set API key for ${def.label}`;
+              state.success = null;
+              render();
             }
+          } catch (err) {
+            connecting = false;
+            state.error = err?.message ?? `Could not reach CLIProxyAPI to set ${def.label} key`;
+            state.success = null;
             render();
-          }, 4e3);
+          }
         } else {
           handleOAuthConnect(selectedProviderId, def.label).catch((err) => {
             oauthConnecting = false;
@@ -303,7 +320,7 @@
           if (!/^https?:\/\//i.test(authUrl)) {
             oauthState = null;
             oauthConnecting = false;
-            connectProvider(providerId);
+            connectProviderChat(providerId);
             showSuccess(`Connecting ${label}... Check chat for auth instructions.`);
             render();
             return;
@@ -323,7 +340,7 @@
           scheduleOAuthPoll();
         } else {
           oauthConnecting = false;
-          connectProvider(providerId);
+          connectProviderChat(providerId);
           showSuccess(`Connecting ${label}... Check chat for auth instructions.`);
         }
         render();
