@@ -15,3 +15,6 @@ apps:
   - path: apps/cliproxy
   - path: apps/workspace-agent
   - path: apps/wello-world
+  - path: apps/claude-code
+  - path: apps/token-market
+  - path: apps/file-viewer

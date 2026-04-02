@@ -1,0 +1,49 @@
+slug: file-viewer
+identifier: com.xaiworkspace.file-viewer
+kind: app
+name: File Viewer
+description: Browse and view files in your workspace container filesystem
+icon: "\U0001F4C2"
+version: 1.0.0
+
+permissions:
+  resources: [storage, instance_files]
+  chat: [chat.send]
+
+service:
+  order: 93
+  navItems:
+    - id: browse
+      label: Browse
+      icon: folder
+
+sandbox: strict
+categories: [utilities, productivity]
+
+help: |
+  # File Viewer
+
+  Browse and view files inside your workspace container.
+
+  **Supported file types:**
+  - Source code (with syntax highlighting): .ts, .js, .py, .go, .rs, .java, .css, .html, .yaml, .json, .sh, and more
+  - Plain text: .txt, .log, .env, .conf
+  - Markdown: .md (rendered as HTML)
+  - Images: .png, .jpg, .gif, .svg, .webp (inline preview)
+  - JSON: .json (collapsible tree view)
+  - Binary: size/type displayed, download button shown
+
+  **Keyboard shortcuts:**
+  - `/` — focus search
+  - `Escape` — clear search / close file
+
+  **Browsing:**
+  - Click folders to expand/collapse
+  - Click files to view content
+  - Use breadcrumbs to navigate up
+  - Refresh button reloads the current directory
+
+  **Actions on open file:**
+  - Copy — copy full content to clipboard
+  - Share — send a snippet to chat
+  - Download — save file locally (files >2 MB always show download option)
