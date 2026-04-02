@@ -9,17 +9,9 @@ APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "=== OpenClaw mini app install ==="
 
-# ── 1. Install pm2 globally if missing ──────────────────────────────────────
-if ! command -v pm2 &>/dev/null; then
-  echo "Installing pm2..."
-  npm install -g pm2 --loglevel=error
-fi
-
-# ── 2. Install bridge dependencies (ws) ─────────────────────────────────────
-if [ ! -d "$APP_DIR/node_modules/ws" ] || [ ! -d "$APP_DIR/node_modules/js-yaml" ]; then
-  echo "Installing bridge dependencies..."
-  cd "$APP_DIR" && npm install --omit=dev --loglevel=error
-fi
+# ── 1. Install openclaw CLI + dependencies into app directory ───────────────
+echo "Installing dependencies..."
+cd "$APP_DIR" && pnpm install --prod 2>/dev/null
 
 # ── 3. Persist bridge env vars to secrets.env (if not already present) ───────
 SECRETS_FILE="/etc/xai/secrets.env"

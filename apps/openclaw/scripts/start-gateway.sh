@@ -4,5 +4,6 @@
 set -a
 [ -f /etc/xai/secrets.env ] && source /etc/xai/secrets.env
 set +a
-OPENCLAW_BIN=$(command -v openclaw 2>/dev/null || echo /usr/local/bin/openclaw)
+APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+OPENCLAW_BIN="${APP_DIR}/node_modules/.bin/openclaw"
 exec "$OPENCLAW_BIN" gateway run "$@"
