@@ -135,7 +135,7 @@ function connectRouter() {
   let pingTimer = null;
 
   ws.on('open', () => {
-    console.log('[workspace-agent] Connected, authenticating...');
+    console.log(`[workspace-agent] Connected, authenticating as ${INSTANCE_ID}...`);
     ws.send(JSON.stringify({
       type: 'gateway_auth',
       instanceId: INSTANCE_ID,
