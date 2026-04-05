@@ -183,6 +183,7 @@ function connectRouter() {
     switch (msg.type) {
       case 'install_app':   handleInstallApp(msg); return;
       case 'uninstall_app': handleUninstallApp(msg); return;
+      case 'uninstall_app_instance': handleUninstallAppInstance(msg); return;
       case 'restart_app':   handleRestartApp(msg); return;
       case 'list_apps':     handleListApps(msg); return;
       case 'exec':          handleExec(msg); return;
@@ -381,8 +382,8 @@ function send(msg) {
   if (routerWs?.readyState === WebSocket.OPEN) routerWs.send(JSON.stringify(msg));
 }
 
-function sendProgress(id, slug, stage, percent) {
-  send({ type: 'install_progress', id, slug, stage, percent });
+function sendProgress(id, slug, stage, percent, name = null) {
+  send({ type: 'install_progress', id, slug, name: name || 'default', stage, percent });
 }
 
 // ── Helper: read gateway password ───────────────────────────────────────────
@@ -538,7 +539,14 @@ function isUrlTrusted(url) {
 const _installingApps = new Set();
 
 async function handleInstallApp(msg) {
-  const { id, slug, identifier, artifactUrl, sourceUrl, subdir, env, manifest } = msg;
+  const { id, slug, identifier, artifactUrl, sourceUrl, subdir, env, manifest, name: instanceName, parameters, upgrade } = msg;
+  const instName = instanceName || 'default';
+
+  // Validate instance name (defense-in-depth — router also validates)
+  if (instName !== 'default' && !/^[a-z0-9][a-z0-9-]*$/.test(instName)) {
+    send({ type: 'install_result', id, slug, name: instName, status: 'error', error: 'Invalid instance name' });
+    return;
+  }
 
   if (_installingApps.has(slug)) {
     console.log('[workspace-agent] Skipping duplicate install for ' + slug);
@@ -547,13 +555,13 @@ async function handleInstallApp(msg) {
   _installingApps.add(slug);
 
   if (!slug || !SAFE_SLUG.test(slug)) {
-    send({ type: 'install_result', id, slug, status: 'error', error: 'Invalid slug' });
+    send({ type: 'install_result', id, slug, name: instName, status: 'error', error: 'Invalid slug' });
     _installingApps.delete(slug);
     return;
   }
 
   if (identifier && !SAFE_IDENTIFIER.test(identifier)) {
-    send({ type: 'install_result', id, slug, status: 'error', error: 'Invalid identifier' });
+    send({ type: 'install_result', id, slug, name: instName, status: 'error', error: 'Invalid identifier' });
     _installingApps.delete(slug);
     return;
   }
@@ -561,24 +569,24 @@ async function handleInstallApp(msg) {
   const appDir = path.join(APPS_DIR, identifier || `com.xshopper.${slug}`);
 
   if (!path.resolve(appDir).startsWith(path.resolve(APPS_DIR))) {
-    send({ type: 'install_result', id, slug, status: 'error', error: 'Invalid identifier' });
+    send({ type: 'install_result', id, slug, name: instName, status: 'error', error: 'Invalid identifier' });
     _installingApps.delete(slug);
     return;
   }
 
-  console.log(`[workspace-agent] Installing app: ${slug} -> ${appDir}`);
+  console.log(`[workspace-agent] Installing app: ${slug}/${instName} -> ${appDir}`);
 
   if (artifactUrl && !isUrlTrusted(artifactUrl)) {
     const domain = (() => { try { return new URL(artifactUrl).hostname; } catch { return 'invalid'; } })();
     console.error(`[workspace-agent] Install rejected for ${slug}: untrusted artifact URL domain: ${domain}`);
-    send({ type: 'install_result', id, slug, status: 'error', error: `Untrusted artifact URL domain: ${domain}` });
+    send({ type: 'install_result', id, slug, name: instName, status: 'error', error: `Untrusted artifact URL domain: ${domain}` });
     _installingApps.delete(slug);
     return;
   }
   if (sourceUrl && !isUrlTrusted(sourceUrl)) {
     const domain = (() => { try { return new URL(sourceUrl).hostname; } catch { return 'invalid'; } })();
     console.error(`[workspace-agent] Install rejected for ${slug}: untrusted source URL domain: ${domain}`);
-    send({ type: 'install_result', id, slug, status: 'error', error: `Untrusted source URL domain: ${domain}` });
+    send({ type: 'install_result', id, slug, name: instName, status: 'error', error: `Untrusted source URL domain: ${domain}` });
     _installingApps.delete(slug);
     return;
   }
@@ -587,7 +595,7 @@ async function handleInstallApp(msg) {
     // 1. Write env vars to secrets.env
     const addedKeys = [];
     if (env && typeof env === 'object') {
-      sendProgress(id, slug, 'configuring', 5);
+      sendProgress(id, slug, 'configuring', 5, instName);
       let existing = '';
       try { existing = fs.readFileSync(SECRETS_FILE, 'utf8'); } catch {}
       for (const [k, v] of Object.entries(env)) {
@@ -605,7 +613,7 @@ async function handleInstallApp(msg) {
     }
 
     // 2. Download artifact
-    sendProgress(id, slug, 'downloading', 10);
+    sendProgress(id, slug, 'downloading', 10, instName);
     fs.mkdirSync(appDir, { recursive: true });
 
     if (addedKeys.length > 0) {
@@ -625,14 +633,14 @@ async function handleInstallApp(msg) {
         const fileBuffer = fs.readFileSync(tmpFile);
         const hash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
         if (hash !== msg.sha256) {
-          send({ type: 'install_result', id, slug, status: 'error', error: `Artifact integrity check failed (expected ${msg.sha256.slice(0, 8)}..., got ${hash.slice(0, 8)}...)` });
+          send({ type: 'install_result', id, slug, name: instName, status: 'error', error: `Artifact integrity check failed (expected ${msg.sha256.slice(0, 8)}..., got ${hash.slice(0, 8)}...)` });
           try { fs.unlinkSync(tmpFile); } catch {}
           return;
         }
         console.log(`[workspace-agent] Artifact integrity verified: ${hash.slice(0, 8)}...`);
       }
 
-      sendProgress(id, slug, 'extracting', 30);
+      sendProgress(id, slug, 'extracting', 30, instName);
       const tmpDir = `/tmp/app-${slug}-${safeIdSuffix}-extract`;
       await execFileAsync('rm', ['-rf', tmpDir], { timeout: 5000 });
       await execFileAsync('mkdir', ['-p', tmpDir], { timeout: 5000 });
@@ -675,7 +683,7 @@ async function handleInstallApp(msg) {
     }
 
     // 3. Run install.sh if present
-    sendProgress(id, slug, 'installing', 50);
+    sendProgress(id, slug, 'installing', 50, instName);
     const installScript = path.join(appDir, 'scripts', 'install.sh');
     if (fs.existsSync(installScript)) {
       await execFileAsync('bash', [installScript], {
@@ -692,7 +700,7 @@ async function handleInstallApp(msg) {
     }
 
     // 5. Regenerate ecosystem and restart pm2
-    sendProgress(id, slug, 'starting', 80);
+    sendProgress(id, slug, 'starting', 80, instName);
     const genScript = path.join(appDir, 'scripts', 'generate-ecosystem.sh');
     if (fs.existsSync(genScript)) {
       await execFileAsync('bash', [genScript], {
@@ -702,32 +710,64 @@ async function handleInstallApp(msg) {
       });
     }
 
-    const ecoFile = path.join(appDir, 'ecosystem.config.js');
-    if (fs.existsSync(ecoFile)) {
-      await execFileAsync('pm2', ['start', ecoFile, '--update-env'], { timeout: 30000 });
-    } else if (manifest?.startup) {
-      const startupCmd = String(manifest.startup).trim();
-      // Validate startup command — reject shell metacharacters (defense-in-depth)
-      if (startupCmd.length > MAX_COMMAND_LENGTH || /[;`|><&\n\r]|\$[\({]/.test(startupCmd)) {
-        console.warn(`[workspace-agent] Rejected unsafe manifest.startup for ${slug}: ${startupCmd.slice(0, 60)}`);
-      } else {
-        // Parse into script + args directly (no bash -c wrapper)
-        const startupParts = startupCmd.split(/\s+/);
-        const eco = 'module.exports = { apps: [{ name: ' + JSON.stringify(slug) + ', script: ' + JSON.stringify(startupParts[0]) + ', args: ' + JSON.stringify(startupParts.slice(1)) + ', cwd: ' + JSON.stringify(appDir) + ', autorestart: true }] };';
-        fs.writeFileSync(ecoFile, eco);
+    // Determine pm2 process name: slug for default, slug--name for named instances
+    const processName = instName === 'default' ? slug : `${slug}--${instName}`;
+    const instanceEnv = {
+      APP_INSTANCE_NAME: instName,
+      APP_PARAMETERS: JSON.stringify(parameters || {}),
+    };
+
+    // Upgrade mode: code already re-downloaded above, restart ALL instances
+    if (upgrade) {
+      const ecoFile = path.join(appDir, 'ecosystem.config.js');
+      if (fs.existsSync(ecoFile)) {
         await execFileAsync('pm2', ['start', ecoFile, '--update-env'], { timeout: 30000 });
       }
-    }
+      // Restart any named instances (slug--*)
+      try {
+        const jlist = await execFileAsync('pm2', ['jlist'], { timeout: 10000 });
+        const pm2List = JSON.parse(jlist.stdout || '[]');
+        for (const p of pm2List) {
+          if (p.name !== slug && p.name.startsWith(`${slug}--`)) {
+            await execFileAsync('pm2', ['restart', p.name], { timeout: 10000 }).catch(() => {});
+          }
+        }
+      } catch {}
+      sendProgress(id, slug, 'complete', 100, instName);
+      send({ type: 'install_result', id, slug, name: instName, status: 'ok' });
+      console.log(`[workspace-agent] App upgraded: ${slug} (all instances restarted)`);
+    } else {
+      // Normal install — start pm2 process with instance env vars
+      const ecoFile = path.join(appDir, 'ecosystem.config.js');
+      if (instName === 'default' && fs.existsSync(ecoFile)) {
+        // Default instance with existing ecosystem file — use as-is
+        await execFileAsync('pm2', ['start', ecoFile, '--update-env'], { timeout: 30000 });
+      } else if (manifest?.startup) {
+        const startupCmd = String(manifest.startup).trim();
+        if (startupCmd.length > MAX_COMMAND_LENGTH || /[;`|><&\n\r]|\$[\({]/.test(startupCmd)) {
+          console.warn(`[workspace-agent] Rejected unsafe manifest.startup for ${slug}: ${startupCmd.slice(0, 60)}`);
+        } else {
+          const startupParts = startupCmd.split(/\s+/);
+          const instanceEcoFile = instName === 'default' ? ecoFile : path.join(appDir, `ecosystem.${instName}.config.js`);
+          const eco = 'module.exports = { apps: [{ name: ' + JSON.stringify(processName) + ', script: ' + JSON.stringify(startupParts[0]) + ', args: ' + JSON.stringify(startupParts.slice(1)) + ', cwd: ' + JSON.stringify(appDir) + ', autorestart: true, env: ' + JSON.stringify(instanceEnv) + ' }] };';
+          fs.writeFileSync(instanceEcoFile, eco);
+          await execFileAsync('pm2', ['start', instanceEcoFile, '--update-env'], { timeout: 30000 });
+          console.log(`[workspace-agent] Started ${processName} from manifest.startup`);
+        }
+      } else if (fs.existsSync(ecoFile)) {
+        await execFileAsync('pm2', ['start', ecoFile, '--update-env'], { timeout: 30000 });
+      }
 
-    sendProgress(id, slug, 'complete', 100);
-    send({ type: 'install_result', id, slug, status: 'ok' });
-    console.log(`[workspace-agent] App installed: ${slug}`);
+      sendProgress(id, slug, 'complete', 100, instName);
+      send({ type: 'install_result', id, slug, name: instName, status: 'ok' });
+      console.log(`[workspace-agent] App installed: ${slug}/${instName} (process: ${processName})`);
+    }
 
     // Re-scan gateways and reconnect if port changed or a new gateway appeared
     refreshGatewayConnection();
   } catch (err) {
-    console.error(`[workspace-agent] Install failed for ${slug}:`, err.message);
-    send({ type: 'install_result', id, slug, status: 'error', error: err.message });
+    console.error(`[workspace-agent] Install failed for ${slug}/${instName}:`, err.message);
+    send({ type: 'install_result', id, slug, name: instName, status: 'error', error: err.message });
   } finally {
     _installingApps.delete(slug);
   }
@@ -792,6 +832,39 @@ function handleUninstallApp(msg) {
   } catch (err) {
     send({ type: 'uninstall_result', id, slug, status: 'error', error: err.message });
   }
+}
+
+// ── uninstall_app_instance — stop a named pm2 process (app files stay) ─────
+
+function handleUninstallAppInstance(msg) {
+  const { slug, name } = msg;
+  const procName = (!name || name === 'default') ? slug : `${slug}--${name}`;
+
+  if (!SAFE_SLUG.test(slug)) {
+    send({ type: 'uninstall_result', slug, name, status: 'error', error: 'Invalid slug' });
+    return;
+  }
+  if (name && !/^[a-z0-9][a-z0-9-]*$/.test(name)) {
+    send({ type: 'uninstall_result', slug, name, status: 'error', error: 'Invalid instance name' });
+    return;
+  }
+
+  try {
+    execFileSync('pm2', ['stop', procName], { timeout: 10000 });
+    execFileSync('pm2', ['delete', procName], { timeout: 10000 });
+  } catch {}
+
+  // Remove instance-specific ecosystem file if it exists
+  const appDir = path.join(APPS_DIR, `com.xshopper.${slug}`);
+  try {
+    const ecoFile = path.join(appDir, `ecosystem.${name}.config.js`);
+    if (name && name !== 'default' && fs.existsSync(ecoFile)) {
+      fs.unlinkSync(ecoFile);
+    }
+  } catch {}
+
+  send({ type: 'uninstall_result', slug, name: name || 'default', status: 'ok' });
+  console.log(`[workspace-agent] Instance stopped: ${procName}`);
 }
 
 // ── restart_app ─────────────────────────────────────────────────────────────
