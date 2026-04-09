@@ -6,6 +6,9 @@ description: AI gateway — manages the core chat engine
 icon: "\U0001F9E0"
 version: 1.0.0
 
+service:
+  order: 1
+
 gateway:
   port: 19001
   protocol: ws

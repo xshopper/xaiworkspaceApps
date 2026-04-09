@@ -14,6 +14,9 @@ commands:
   disconnect: "./bin/cli-proxy-api auth remove {args}"
   uninstall: "bash scripts/uninstall.sh"
 
+service:
+  order: 20
+
 ui:
   type: panel
   title: CLI Proxy

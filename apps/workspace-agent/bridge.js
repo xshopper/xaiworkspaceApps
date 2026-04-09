@@ -189,6 +189,8 @@ function connectRouter() {
       case 'exec':          handleExec(msg); return;
       case 'scan':          handleScan(); return;
       case 'config_update': handleConfigUpdate(msg); return;
+      case 'app_message':   handleAppMessage(msg); return;
+      case 'user_input':    handleUserInput(msg); return;
     }
 
     // Everything else: forward to app gateway
@@ -459,6 +461,32 @@ function handleConfigUpdate(msg) {
   } finally {
     try { fs.unlinkSync(pullFlag); } catch {}
   }
+}
+
+// ── Inter-app message delivery ──────────────────────────────────────────────
+
+function handleAppMessage(msg) {
+  const toName = msg.to?.name;
+  const toSlug = msg.to?.slug || 'agent';
+  if (!toName) {
+    console.warn('[workspace-agent] app_message missing to.name');
+    return;
+  }
+  deliverToLocalApp(toSlug, toName, msg).then(ok => {
+    if (!ok) console.warn(`[workspace-agent] Could not deliver app_message to ${toSlug}/${toName}`);
+  });
+}
+
+function handleUserInput(msg) {
+  const toName = msg.to?.name;
+  const toSlug = msg.to?.slug;
+  if (!toName || !toSlug) {
+    console.warn('[workspace-agent] user_input missing to.slug or to.name');
+    return;
+  }
+  deliverToLocalApp(toSlug, toName, msg).then(ok => {
+    if (!ok) console.warn(`[workspace-agent] Could not deliver user_input to ${toSlug}/${toName}`);
+  });
 }
 
 // ── Report installed apps ───────────────────────────────────────────────────
@@ -1048,19 +1076,121 @@ function handleScan() {
   send({ type: 'scan_result', instances: apps });
 }
 
-// ── Health endpoint ─────────────────────────────────────────────────────────
+// ── Health + Inter-App Messaging endpoint ───────────────────────────────────
 
-const healthServer = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({
-    ok: true,
-    agentVersion: AGENT_VERSION,
-    authenticated: routerAuthenticated,
-    gateway: gatewayWs?.readyState === WebSocket.OPEN && gatewayAuthenticated ? 'connected' : 'disconnected',
-    gateways: gateways.map(g => ({ slug: g.slug, port: g.port })),
-    instanceId: INSTANCE_ID,
-    uptime: process.uptime(),
-  }));
+function readHttpBody(req, maxBytes = 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on('data', c => {
+      total += c.length;
+      if (total > maxBytes) { req.destroy(); reject(new Error('Body too large')); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString())); }
+      catch { resolve({}); }
+    });
+    req.on('error', reject);
+  });
+}
+
+function httpJson(res, status, data) {
+  const body = JSON.stringify(data);
+  res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
+  res.end(body);
+}
+
+/**
+ * Deliver a message to a local app pm2 process by reading its port file
+ * and POSTing to its HTTP server.
+ * Port file convention: /tmp/{slug}-{name}.port (e.g. /tmp/agent-dev-01.port)
+ */
+async function deliverToLocalApp(slug, name, message) {
+  try {
+    // Validate slug and name to prevent path traversal in port file lookup
+    if (!slug || !SAFE_SLUG.test(slug)) return false;
+    if (!name || !SAFE_SLUG.test(name)) return false;
+    const portFile = `/tmp/${slug}-${name}.port`;
+    if (!fs.existsSync(portFile)) return false;
+    const port = parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10);
+    if (!port) return false;
+
+    const res = await fetch(`http://127.0.0.1:${port}/message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(message),
+    });
+    return res.ok;
+  } catch (err) {
+    console.warn(`[workspace-agent] Failed to deliver to ${slug}/${name}:`, err.message);
+    return false;
+  }
+}
+
+const healthServer = http.createServer(async (req, res) => {
+  const url = req.url?.split('?')[0];
+
+  // GET /health (existing)
+  if (req.method === 'GET' && (url === '/' || url === '/health')) {
+    httpJson(res, 200, {
+      ok: true,
+      agentVersion: AGENT_VERSION,
+      authenticated: routerAuthenticated,
+      gateway: gatewayWs?.readyState === WebSocket.OPEN && gatewayAuthenticated ? 'connected' : 'disconnected',
+      gateways: gateways.map(g => ({ slug: g.slug, port: g.port })),
+      instanceId: INSTANCE_ID,
+      uptime: process.uptime(),
+    });
+    return;
+  }
+
+  // POST /api/app-message — inter-app messaging (called by pm2 processes via curl)
+  // Body: { from: { slug, name }, to: { slug, name }, message: "..." }
+  // Shorthand: { from: "dev-01", to: "pm-01", message: "..." } (defaults slug to "agent")
+  if (req.method === 'POST' && url === '/api/app-message') {
+    const body = await readHttpBody(req);
+    const { message } = body;
+    const from = typeof body.from === 'string' ? { slug: 'agent', name: body.from } : body.from;
+    const to = typeof body.to === 'string' ? { slug: 'agent', name: body.to } : body.to;
+
+    if (!from?.name || !to?.name || !message) {
+      httpJson(res, 400, { ok: false, error: 'from, to, and message are required' });
+      return;
+    }
+
+    const msg = {
+      type: 'app_message',
+      from,
+      to,
+      payload: { message },
+    };
+
+    // Try local delivery first (same bridge, skip router round-trip)
+    const delivered = await deliverToLocalApp(to.slug, to.name, msg);
+    if (!delivered) {
+      // Not local — forward via router WS
+      send(msg);
+    }
+
+    httpJson(res, 200, { ok: true });
+    return;
+  }
+
+  // POST /api/agent-response — agent sends result back to user (forwarded to router → frontend)
+  if (req.method === 'POST' && url === '/api/agent-response') {
+    const body = await readHttpBody(req);
+    send({
+      type: 'agent_response',
+      agentName: body.agentName,
+      result: body.result,
+    });
+    httpJson(res, 200, { ok: true });
+    return;
+  }
+
+  res.writeHead(404);
+  res.end();
 });
 
 healthServer.listen(HEALTH_PORT, '0.0.0.0', () => {
