@@ -1,0 +1,59 @@
+slug: connect
+identifier: com.xshopper.connect
+kind: app
+name: Connect
+description: OAuth connection manager — view and manage connected third-party services (Google, GitHub, Microsoft, Slack, and more)
+icon: "\U0001F517"
+version: 1.0.0
+
+service:
+  order: 15
+
+ui:
+  type: panel
+  title: Connections
+
+singleton: true
+
+persona:
+  soul: |
+    You help the user manage OAuth tool connections for third-party services.
+    Always check the current state of connections before suggesting changes.
+  rules: |
+    @connect commands are handled locally by the frontend ConnectWizard.
+    The user can also open the Connections UI from the service dropdown.
+
+    Supported commands:
+    @connect or @connect list      — show all connected providers
+    @connect help                  — show usage help
+    @connect <provider>            — show details for a single provider (e.g. google, github)
+    @connect disconnect <provider> — remove a provider connection
+    @connect add [domain]          — add a new provider (delegates to authorize wizard)
+
+    When the user asks about connections, tell them they can either:
+    - Type `@connect` in chat to see the list with inline buttons
+    - Open the Connect service from the service dropdown for the full UI
+  knowledge: |
+    Built-in providers: google, github, slack, microsoft, notion, stripe
+    Custom providers are added via /authorize or the "+ Add Provider" button.
+    OAuth tokens are stored server-side in oc_tool_connections and refreshed automatically.
+
+permissions:
+  chat: [chat.send, chat.read]
+
+help: |
+  Manage OAuth connections to third-party services.
+
+  **Commands:**
+    `@connect`                      — list all connections with status
+    `@connect list`                 — same as bare @connect
+    `@connect <provider>`           — show details for a provider
+    `@connect disconnect <prov>`    — remove a provider's connection
+    `@connect add [domain]`         — add a new OAuth provider
+    `@connect help`                 — show this help
+
+  **UI:**
+    Select "Connect" from the service dropdown to open the full connections panel
+    where you can view all providers, connect new ones, and disconnect existing ones.
+
+sandbox: strict
