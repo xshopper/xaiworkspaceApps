@@ -115,6 +115,7 @@ These fields apply to all five kinds.
 | `cleanup` | string | Shell command to stop/remove the app's processes (run on uninstall or app stop). Max 500 chars |
 | `port` | integer | Network port the app listens on. Conflicts checked against other apps and reserved ports (22, 19001, 19443). Sets `APP_PORT` env var |
 | `configurable` | boolean | Whether the app has user-editable configuration |
+| `singleton` | boolean | When `true`, only one install per instance is allowed. Use for infrastructure services that bind a fixed port |
 | `authProvider` | string | OAuth provider name for MCP servers (lowercase alphanumeric). Router injects OAuth tokens per-call |
 | `commands` | object | Map of command names to shell commands. Keys must be valid identifiers (`/^[a-zA-Z_][a-zA-Z0-9_-]*$/`, kebab-case allowed). Values are shell command strings; use `{args}` as a placeholder for user-provided arguments. Commands are executed directly by the platform (manifest-driven exec, no AI model needed) |
 | `help` | string | Multi-line Markdown help text shown when the user types `@<slug> help`. Document available commands and usage examples here |

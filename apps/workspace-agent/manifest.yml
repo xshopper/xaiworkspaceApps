@@ -11,4 +11,5 @@ commands:
   logs: "pm2 logs workspace-agent --lines 40 --nostream"
   restart: "pm2 restart workspace-agent"
 
+singleton: true
 cleanup: "echo 'workspace-agent is a system process'"
