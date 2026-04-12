@@ -4,6 +4,14 @@
 set -euo pipefail
 APP_DIR="${HOME}/apps/com.xshopper.cliproxy"
 
+# Fix stale PM2 sockets (e.g., left by a root-owned PM2 daemon).
+# The user owns ~/.pm2 so can delete files regardless of file ownership.
+PM2_DIR="${HOME}/.pm2"
+if [ -d "$PM2_DIR" ] && [ -e "$PM2_DIR/rpc.sock" ] && ! pm2 ping >/dev/null 2>&1; then
+  echo "Cleaning up stale PM2 sockets..."
+  rm -f "$PM2_DIR/rpc.sock" "$PM2_DIR/pub.sock" 2>/dev/null || true
+fi
+
 mkdir -p "${APP_DIR}/bin" "${APP_DIR}/auths"
 
 if [ -x "${APP_DIR}/bin/cli-proxy-api" ]; then
