@@ -54,11 +54,14 @@
     xai.chat.send(`@cliproxy disconnect ${name}`);
   }
   async function connectApiKeyProvider(providerId, apiKey) {
-    const res = await xai.http(`${BASE}/admin/token`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ provider: providerId, access_token: apiKey })
-    });
+    const res = await xai.http(
+      `${BASE}/admin/token`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: providerId, access_token: apiKey })
+      }
+    );
     return res.data;
   }
   function connectProviderChat(providerId) {
@@ -821,6 +824,37 @@
       xai.on("chat.message", (msg) => {
         if (msg?.text?.includes?.("@cliproxy")) {
           setTimeout(loadData, 3e3);
+        }
+      });
+      xai.on("cliproxy.oauth.callback", (data) => {
+        if (!oauthConnecting || !oauthState) return;
+        if (!data?.state || data.state === oauthState) {
+          let immediateOAuthPoll = function() {
+            oauthPollTimer = setTimeout(async () => {
+              if (!oauthConnecting || !oauthState) return;
+              try {
+                const poll = await pollCliOAuth(oauthState, "", data?.provider ?? "");
+                if (poll.status === "ok") {
+                  const label = PROVIDERS.find((p) => p.id === selectedProviderId)?.label ?? data?.provider ?? "";
+                  oauthState = null;
+                  oauthAuthUrl = null;
+                  oauthConnecting = false;
+                  oauthPollTimer = null;
+                  showSuccess(`${label} connected successfully! Models are now available.`);
+                  await loadData();
+                  tokenCardProvider = data?.provider ?? selectedProviderId;
+                  render();
+                } else if (++retries < maxRetries) {
+                  immediateOAuthPoll();
+                }
+              } catch {
+              }
+            }, 500 + retries * 1e3);
+          };
+          if (oauthPollTimer) clearTimeout(oauthPollTimer);
+          let retries = 0;
+          const maxRetries = 5;
+          immediateOAuthPoll();
         }
       });
     }

@@ -821,3 +821,39 @@ xai.on('chat.message', (msg: any) => {
     setTimeout(loadData, 3000);
   }
 });
+
+// OAuth callback received via WS push (Chrome addon → router → WS → here).
+// Triggers an immediate poll so the user doesn't wait for the 3s timer.
+xai.on('cliproxy.oauth.callback', (data: any) => {
+  if (!oauthConnecting || !oauthState) return;
+  if (!data?.state || data.state === oauthState) {
+    if (oauthPollTimer) clearTimeout(oauthPollTimer);
+    let retries = 0;
+    const maxRetries = 5;
+    function immediateOAuthPoll() {
+      oauthPollTimer = setTimeout(async () => {
+        if (!oauthConnecting || !oauthState) return;
+        try {
+          const poll = await pollCliOAuth(oauthState!, '', data?.provider ?? '');
+          if (poll.status === 'ok') {
+            const label = PROVIDERS.find(p => p.id === selectedProviderId)?.label ?? data?.provider ?? '';
+            oauthState = null;
+            oauthAuthUrl = null;
+            oauthConnecting = false;
+            oauthPollTimer = null;
+            showSuccess(`${label} connected successfully! Models are now available.`);
+            await loadData();
+            tokenCardProvider = data?.provider ?? selectedProviderId;
+            render();
+          } else if (++retries < maxRetries) {
+            // CLIProxyAPI still exchanging the code — retry with backoff
+            immediateOAuthPoll();
+          }
+          // After max retries, timer stops — regular scheduleOAuthPoll from
+          // handleOAuthConnect closure is dead, but the 15min timeout will clean up.
+        } catch { /* give up, timeout will clean up */ }
+      }, 500 + retries * 1000);
+    }
+    immediateOAuthPoll();
+  }
+});
