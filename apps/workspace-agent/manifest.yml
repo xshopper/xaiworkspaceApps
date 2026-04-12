@@ -13,3 +13,6 @@ commands:
 
 singleton: true
 cleanup: "echo 'workspace-agent is a system process'"
+
+service:
+  order: 5

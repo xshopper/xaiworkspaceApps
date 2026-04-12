@@ -16,7 +16,7 @@ try {
   // Handle default export for ESM
   if (ivm.default) ivm = ivm.default;
 } catch {
-  console.warn('isolated-vm not available — pricing engine will use fallback eval (dev only)');
+  console.error('[FATAL] isolated-vm not available — pricing engine will refuse all code execution for safety');
   ivm = null;
 }
 
@@ -92,10 +92,10 @@ export class PricingEngine {
   async execute(code, input) {
     const start = performance.now();
 
-    if (ivm) {
-      return this._executeIsolated(code, input, start);
+    if (!ivm) {
+      return { inputPricePerMTok: 0, outputPricePerMTok: 0, error: 'Pricing engine unavailable: isolated-vm not installed' };
     }
-    return this._executeFallback(code, input, start);
+    return this._executeIsolated(code, input, start);
   }
 
   /** Execute in an isolated-vm V8 isolate (production). */
@@ -119,8 +119,9 @@ export class PricingEngine {
       isolateCache.set(key, isolate);
     }
 
+    let context;
     try {
-      const context = await isolate.createContext();
+      context = await isolate.createContext();
       const jail = context.global;
 
       // Inject input data as a frozen global
@@ -150,11 +151,9 @@ export class PricingEngine {
         executionMs,
       };
     } catch (err) {
-      // If isolate timed out or errored, remove from cache
-      if (!cached) {
-        isolateCache.delete(key);
-        try { isolate.dispose(); } catch { /* ignore */ }
-      }
+      // Remove errored isolate from cache and dispose to prevent DoS on co-cached strategies
+      isolateCache.delete(key);
+      try { isolate.dispose(); } catch { /* ignore */ }
 
       return {
         inputPricePerMTok: 0,
@@ -162,32 +161,8 @@ export class PricingEngine {
         error: err.message,
         executionMs: Math.round(performance.now() - start),
       };
-    }
-  }
-
-  /** Fallback execution without isolated-vm (dev/testing only). NOT safe for production. */
-  _executeFallback(code, input, start) {
-    try {
-      // eslint-disable-next-line no-new-func
-      const fn = new Function('input', code);
-      const result = fn(input);
-
-      if (!result || typeof result !== 'object') {
-        return { inputPricePerMTok: 0, outputPricePerMTok: 0, error: 'Strategy must return an object' };
-      }
-
-      return {
-        inputPricePerMTok: result.inputPricePerMTok ?? 0,
-        outputPricePerMTok: result.outputPricePerMTok ?? 0,
-        executionMs: Math.round(performance.now() - start),
-      };
-    } catch (err) {
-      return {
-        inputPricePerMTok: 0,
-        outputPricePerMTok: 0,
-        error: err.message,
-        executionMs: Math.round(performance.now() - start),
-      };
+    } finally {
+      if (context) try { context.release(); } catch { /* already released or disposed */ }
     }
   }
 

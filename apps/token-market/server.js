@@ -434,7 +434,7 @@ const server = http.createServer(async (req, res) => {
     await route.handler(req, res, route.params);
   } catch (err) {
     console.error(`${req.method} ${pathname} error:`, err.message);
-    json(res, 500, { error: err.message });
+    json(res, 500, { error: 'Internal server error' });
   }
 });
 

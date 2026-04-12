@@ -1,0 +1,34 @@
+slug: agent
+identifier: com.xaiworkspace.agent
+kind: agent
+name: Agent
+description: AI agent with configurable persona — runs Claude Code in your workspace with inter-agent messaging
+icon: "\U0001F916"
+version: 0.1.0
+
+startup: "node index.js"
+
+parameters:
+  - name: persona
+    label: Agent Persona
+    type: select
+    required: true
+    options:
+      - { value: "pm", label: "Project Manager" }
+      - { value: "developer", label: "Senior Developer" }
+      - { value: "tester", label: "QA Tester" }
+      - { value: "reviewer", label: "Code Reviewer" }
+  - name: model
+    label: Default Model
+    type: select
+    default: "claude-sonnet-4-6"
+    options:
+      - { value: "claude-haiku-4-5-20251001", label: "Haiku (Fast)" }
+      - { value: "claude-sonnet-4-6", label: "Sonnet (Balanced)" }
+      - { value: "claude-opus-4-6", label: "Opus (Best)" }
+
+permissions:
+  resources: [storage]
+  chat: [chat.send, chat.read, chat.listen]
+
+sandbox: relaxed

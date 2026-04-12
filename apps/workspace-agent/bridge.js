@@ -516,14 +516,19 @@ function reportInstalledApps() {
     const systemProcs = new Set(['workspace-agent', 'bootstrap-bridge', 'bridge', 'updater']);
     const apps = procs
       .filter(p => !systemProcs.has(p.name))
-      .map(p => ({
-        slug: p.name,
+      .map(p => {
+        // pm2 names multi-instance apps as "slug--instanceName"; strip suffix for slug lookup
+        const slug = p.name.includes('--') ? p.name.split('--')[0] : p.name;
+        return {
+        slug,
+        name: p.name.includes('--') ? p.name.split('--')[1] : 'default',
         status: p.pm2_env?.status || 'unknown',
-        version: readManifestVersion(p.name),
+        version: readManifestVersion(slug),
         restarts: p.pm2_env?.restart_time || 0,
         memory: p.monit?.memory || 0,
         cpu: p.monit?.cpu || 0,
-      }));
+      };
+      });
     if (apps.length > 0) {
       send({
         type: 'apps_status',
@@ -576,21 +581,22 @@ async function handleInstallApp(msg) {
     return;
   }
 
-  if (_installingApps.has(slug)) {
-    console.log('[workspace-agent] Skipping duplicate install for ' + slug);
+  const installKey = `${slug}/${instName}`;
+  if (_installingApps.has(installKey)) {
+    console.log('[workspace-agent] Skipping duplicate install for ' + installKey);
     return;
   }
-  _installingApps.add(slug);
+  _installingApps.add(installKey);
 
   if (!slug || !SAFE_SLUG.test(slug)) {
     send({ type: 'install_result', id, slug, name: instName, status: 'error', error: 'Invalid slug' });
-    _installingApps.delete(slug);
+    _installingApps.delete(installKey);
     return;
   }
 
   if (identifier && !SAFE_IDENTIFIER.test(identifier)) {
     send({ type: 'install_result', id, slug, name: instName, status: 'error', error: 'Invalid identifier' });
-    _installingApps.delete(slug);
+    _installingApps.delete(installKey);
     return;
   }
 
@@ -598,7 +604,7 @@ async function handleInstallApp(msg) {
 
   if (!path.resolve(appDir).startsWith(path.resolve(APPS_DIR))) {
     send({ type: 'install_result', id, slug, name: instName, status: 'error', error: 'Invalid identifier' });
-    _installingApps.delete(slug);
+    _installingApps.delete(installKey);
     return;
   }
 
@@ -608,14 +614,14 @@ async function handleInstallApp(msg) {
     const domain = (() => { try { return new URL(artifactUrl).hostname; } catch { return 'invalid'; } })();
     console.error(`[workspace-agent] Install rejected for ${slug}: untrusted artifact URL domain: ${domain}`);
     send({ type: 'install_result', id, slug, name: instName, status: 'error', error: `Untrusted artifact URL domain: ${domain}` });
-    _installingApps.delete(slug);
+    _installingApps.delete(installKey);
     return;
   }
   if (sourceUrl && !isUrlTrusted(sourceUrl)) {
     const domain = (() => { try { return new URL(sourceUrl).hostname; } catch { return 'invalid'; } })();
     console.error(`[workspace-agent] Install rejected for ${slug}: untrusted source URL domain: ${domain}`);
     send({ type: 'install_result', id, slug, name: instName, status: 'error', error: `Untrusted source URL domain: ${domain}` });
-    _installingApps.delete(slug);
+    _installingApps.delete(installKey);
     return;
   }
 
@@ -797,7 +803,7 @@ async function handleInstallApp(msg) {
     console.error(`[workspace-agent] Install failed for ${slug}/${instName}:`, err.message);
     send({ type: 'install_result', id, slug, name: instName, status: 'error', error: err.message });
   } finally {
-    _installingApps.delete(slug);
+    _installingApps.delete(installKey);
   }
 }
 
@@ -1193,7 +1199,7 @@ const healthServer = http.createServer(async (req, res) => {
   res.end();
 });
 
-healthServer.listen(HEALTH_PORT, '0.0.0.0', () => {
+healthServer.listen(HEALTH_PORT, '127.0.0.1', () => {
   console.log(`[workspace-agent] Health on :${HEALTH_PORT}`);
 });
 

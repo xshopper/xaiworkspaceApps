@@ -1,0 +1,14 @@
+{
+  "name": "agent",
+  "version": "0.1.0",
+  "description": "AI agent mini-app — thin wrapper around Claude Code SDK with inter-agent messaging",
+  "type": "module",
+  "main": "index.js",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
