@@ -102,11 +102,9 @@ export class PricingEngine {
   async _executeIsolated(code, input, start) {
     const key = cacheKey(code);
     let isolate;
-    let cached = false;
 
     if (isolateCache.has(key)) {
       isolate = isolateCache.get(key);
-      cached = true;
     } else {
       isolate = new ivm.Isolate({ memoryLimit: MAX_MEMORY_MB });
       // Evict oldest if cache full

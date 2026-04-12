@@ -20,6 +20,12 @@ export class RevenueLogger {
     // Start flush timer
     this.flushTimer = setInterval(() => this._flush(), FLUSH_INTERVAL_MS);
     if (this.flushTimer.unref) this.flushTimer.unref();
+
+    // Flush remaining records on process shutdown
+    const onExit = () => this.dispose();
+    process.once('SIGINT', onExit);
+    process.once('SIGTERM', onExit);
+    process.once('beforeExit', onExit);
   }
 
   /**
@@ -71,17 +77,7 @@ export class RevenueLogger {
     }
   }
 
-  /** Get local (in-memory) totals for quick display. */
-  getBufferedCount() {
-    return this.buffer.length;
-  }
-
-  /** Force flush any buffered records. */
-  async flush() {
-    return this._flush();
-  }
-
-  /** Stop the flush timer. */
+  /** Stop the flush timer and flush remaining records. Call on process shutdown. */
   dispose() {
     if (this.flushTimer) {
       clearInterval(this.flushTimer);

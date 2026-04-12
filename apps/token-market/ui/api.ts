@@ -6,7 +6,6 @@ import type {
   PricingResult,
   KeyHealth,
   RevenueSummary,
-  RevenueEntry,
 } from './types';
 
 const BASE = 'http://localhost:3460';
@@ -145,14 +144,6 @@ export async function resetCircuitBreaker(listingId: string): Promise<void> {
 /** Get revenue summary. */
 export async function getRevenueSummary(): Promise<RevenueSummary> {
   const res = await xai.http<RevenueSummary>(`${BASE}/revenue/summary`);
-  return res.data;
-}
-
-/** Get revenue log entries. */
-export async function getRevenueLog(limit = 50, offset = 0): Promise<{ entries: RevenueEntry[] }> {
-  const res = await xai.http<{ entries: RevenueEntry[] }>(
-    `${BASE}/revenue?limit=${limit}&offset=${offset}`,
-  );
   return res.data;
 }
 

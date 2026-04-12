@@ -196,17 +196,3 @@ export async function sendMessage(p: Page, text: string): Promise<string> {
 export async function mentionApp(p: Page, slug: string, message: string): Promise<string> {
   return sendMessage(p, `@${slug} ${message}`);
 }
-
-/**
- * Install a mini-app by slug.
- */
-export async function installApp(p: Page, slug: string): Promise<string> {
-  return sendMessage(p, `/install ${slug}`);
-}
-
-/**
- * Uninstall a mini-app by slug.
- */
-export async function uninstallApp(p: Page, slug: string): Promise<string> {
-  return sendMessage(p, `/uninstall ${slug}`);
-}

@@ -89,6 +89,7 @@ async function runClaude(prompt) {
     permissionMode: 'bypassPermissions',
     allowDangerouslySkipPermissions: true,
     maxTurns: 50,
+    model: PARAMS.model || undefined,
   };
 
   if (sessionId) {

@@ -87,45 +87,12 @@ export class HealthMonitor {
     return true;
   }
 
-  /** Get health status for all tracked listings. */
-  getStatus() {
-    const result = {};
-    for (const [id, b] of this.breakers) {
-      result[id] = {
-        state: b.state,
-        failureCount: b.failures.length,
-        lastFailureReason: b.lastFailureReason,
-        disabledUntil: b.disabledUntil ? new Date(b.disabledUntil).toISOString() : null,
-        successCount: b.successCount,
-      };
-    }
-    return result;
-  }
-
-  /** Manually reset a circuit breaker. */
-  async resetBreaker(listingId) {
-    const b = this._getBreaker(listingId);
-    b.state = 'closed';
-    b.failures = [];
-    b.disabledUntil = null;
-    b.lastFailureReason = null;
-    await this._syncToRouter(listingId, b);
-    return { ok: true, state: 'closed' };
-  }
-
   /** Start periodic health check polling. */
   startPolling() {
     if (this.pollTimer) return;
     this.pollTimer = setInterval(() => this._poll(), POLL_INTERVAL_MS);
     // Don't block process exit
     if (this.pollTimer.unref) this.pollTimer.unref();
-  }
-
-  stopPolling() {
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = null;
-    }
   }
 
   // ── Internal ───────────────────────────────────────────────────────────

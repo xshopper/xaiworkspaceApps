@@ -320,20 +320,6 @@ routes.set('POST /sync', async (req, res) => {
   json(res, 200, data);
 });
 
-/** GET /sync/status — check sync status */
-routes.set('GET /sync/status', async (req, res) => {
-  const data = await routerFetch('GET', '/api/market/sync/status', authToken(req));
-  json(res, 200, data);
-});
-
-// ── Price feed ───────────────────────────────────────────────────────────
-
-/** GET /price-feed — latest price feed data */
-routes.set('GET /price-feed', async (req, res) => {
-  const data = await routerFetch('GET', '/api/market/price-feed', authToken(req));
-  json(res, 200, data);
-});
-
 // ── LiteLLM callback hook (called by LiteLLM on each completion) ─────────
 
 /** POST /hooks/completion — LiteLLM completion callback for billing + health tracking */
