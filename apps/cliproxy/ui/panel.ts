@@ -848,10 +848,23 @@ xai.on('cliproxy.oauth.callback', (data: any) => {
           } else if (++retries < maxRetries) {
             // CLIProxyAPI still exchanging the code — retry with backoff
             immediateOAuthPoll();
+          } else {
+            // Exhausted retries — clean up and show error
+            oauthState = null;
+            oauthAuthUrl = null;
+            oauthConnecting = false;
+            oauthPollTimer = null;
+            state.error = 'Authentication confirmation timed out. Please try again.';
+            render();
           }
-          // After max retries, timer stops — regular scheduleOAuthPoll from
-          // handleOAuthConnect closure is dead, but the 15min timeout will clean up.
-        } catch { /* give up, timeout will clean up */ }
+        } catch {
+          oauthState = null;
+          oauthAuthUrl = null;
+          oauthConnecting = false;
+          oauthPollTimer = null;
+          state.error = 'Authentication confirmation failed unexpectedly.';
+          render();
+        }
       }, 500 + retries * 1000);
     }
     immediateOAuthPoll();

@@ -846,8 +846,21 @@
                   render();
                 } else if (++retries < maxRetries) {
                   immediateOAuthPoll();
+                } else {
+                  oauthState = null;
+                  oauthAuthUrl = null;
+                  oauthConnecting = false;
+                  oauthPollTimer = null;
+                  state.error = "Authentication confirmation timed out. Please try again.";
+                  render();
                 }
               } catch {
+                oauthState = null;
+                oauthAuthUrl = null;
+                oauthConnecting = false;
+                oauthPollTimer = null;
+                state.error = "Authentication confirmation failed unexpectedly.";
+                render();
               }
             }, 500 + retries * 1e3);
           };
