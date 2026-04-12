@@ -18,3 +18,6 @@ apps:
   - path: apps/claude-code
   - path: apps/token-market
   - path: apps/file-viewer
+  - path: apps/connect
+  - path: apps/agent
+  - path: apps/done24bot

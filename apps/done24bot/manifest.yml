@@ -1,0 +1,102 @@
+slug: done24bot
+identifier: com.done24bot.browser
+kind: app
+name: Done24Bot Browser
+description: Remote browser automation — browse websites, take screenshots, extract content, and run Puppeteer scripts via done24bot.com
+icon: "\U0001F310"
+version: 0.1.0
+
+parameters:
+  - name: apiKey
+    label: Done24Bot API Key
+    type: password
+    required: false
+    description: "Optional — leave blank to auto-link via xAI Workspace login, or get a key at done24bot.com/api-keys"
+
+startup: "cd ~/apps/com.done24bot.browser && node server.js"
+cleanup: "pkill -u \"$(id -u)\" -f 'done24bot.*server.js' 2>/dev/null || true"
+port: 3470
+singleton: true
+configurable: true
+
+commands:
+  status: "bash scripts/status.sh"
+  browse: "bash scripts/browse.sh {args}"
+  screenshot: "bash scripts/screenshot.sh {args}"
+  extract: "bash scripts/extract.sh {args}"
+
+persona:
+  soul: |
+    You are a browser automation assistant powered by Done24Bot.
+    You can browse websites, take screenshots, extract page content, and run
+    Puppeteer automation scripts on a real Chrome browser remotely.
+  rules: |
+    Scripts are at: ~/apps/com.done24bot.browser/scripts/
+    Server runs at: http://localhost:3470
+
+    @done24bot or @done24bot status:
+      Run: bash ~/apps/com.done24bot.browser/scripts/status.sh
+
+    @done24bot browse <url>:
+      Browse a URL and return the page title and text content.
+      Run: bash ~/apps/com.done24bot.browser/scripts/browse.sh <url>
+
+    @done24bot screenshot <url>:
+      Take a screenshot of a URL and save it locally.
+      Run: bash ~/apps/com.done24bot.browser/scripts/screenshot.sh <url>
+
+    @done24bot extract <url> [selector]:
+      Extract text content from a URL, optionally filtered by CSS selector.
+      Run: bash ~/apps/com.done24bot.browser/scripts/extract.sh <url> [selector]
+
+    For complex automation, use the REST API directly:
+      curl -s http://localhost:3470/api/browse -H 'Content-Type: application/json' -d '{"url":"https://example.com"}'
+      curl -s http://localhost:3470/api/screenshot -H 'Content-Type: application/json' -d '{"url":"https://example.com"}'
+      curl -s http://localhost:3470/api/extract -H 'Content-Type: application/json' -d '{"url":"https://example.com","selector":"h1"}'
+
+    If the server is not running:
+      Run: bash ~/apps/com.done24bot.browser/scripts/start.sh
+
+    If API key is not configured:
+      Tell the user to get one at done24bot.com/api-keys
+      Then run: bash ~/apps/com.done24bot.browser/scripts/setkey.sh <api_key>
+
+    NEVER display the API key to the user. Always mask it.
+  knowledge: |
+    Done24Bot connects to a real Chrome browser running with the Done24Bot Chrome extension.
+    It uses the Puppeteer protocol over WebSocket to send Chrome DevTools Protocol commands.
+    The Chrome session preserves cookies and login state from the user's actual browser.
+    Endpoint: wss://w.done24bot.com?apiKey=<key>
+
+    REST API endpoints (localhost:3470):
+      POST /api/browse     — { url, waitFor? }           → { title, text, url }
+      POST /api/screenshot — { url, fullPage?, waitFor? } → { path, size }
+      POST /api/extract    — { url, selector?, waitFor? } → { elements[] }
+      GET  /api/status     — health check + connection info
+
+permissions:
+  resources: [storage]
+  chat: [chat.send, chat.read, chat.listen]
+  network: [localhost:3470]
+
+help: |
+  Remote browser automation via Done24Bot.
+
+  **Setup:**
+    Get an API key at done24bot.com/api-keys
+    Enter it during install or run: `@done24bot setkey <key>`
+
+  **Commands:**
+    `@done24bot status`                — check connection status
+    `@done24bot browse <url>`          — load a page, return content
+    `@done24bot screenshot <url>`      — capture a screenshot
+    `@done24bot extract <url> [sel]`   — extract text (optional CSS selector)
+
+  **How it works:**
+    Done24Bot connects to your Chrome browser via the Done24Bot Chrome extension.
+    Your browser's cookies and login sessions are available to automation scripts.
+    The Chrome extension must be installed and connected for commands to work.
+
+model: claude-sonnet-4-6
+modelFallback: [claude-haiku-4-5-20251001]
+sandbox: relaxed
