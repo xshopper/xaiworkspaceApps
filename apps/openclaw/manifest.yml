@@ -1,8 +1,8 @@
 slug: openclaw
 identifier: com.xshopper.openclaw
 kind: app
-name: OpenClaw Gateway
-description: AI gateway — manages the core chat engine
+name: OpenClaw
+description: Core AI chat engine — handles all user messages and slash commands
 icon: "\U0001F9E0"
 version: 1.0.0
 
@@ -22,7 +22,8 @@ commands:
 
 persona:
   soul: |
-    You manage the OpenClaw gateway process.
+    You are the core AI assistant for xAI Workspace.
+    You handle all user messages and slash commands.
     Always check status before making changes. Never guess — run the scripts.
   rules: |
     Scripts are at: ~/apps/com.xshopper.openclaw/scripts/
@@ -47,10 +48,14 @@ persona:
 
     NEVER display API keys or tokens. Always show command output to user.
   knowledge: |
-    OpenClaw gateway listens on $PORT (default 19001).
+    OpenClaw listens on $PORT (default 19001).
     The workspace-agent handles the router bridge connection.
     All processes managed by pm2: openclaw, config-sync,
     config-pull, workspace-pull, health-watchdog.
+
+    Slash commands handled by the AI:
+    /help, /status, /models, /config, /commands, /plugins, /tools.
+    All messages not intercepted by the frontend or router pass through here.
 
 permissions:
   resources: [storage]
@@ -58,7 +63,7 @@ permissions:
   network: [localhost:19001]
 
 help: |
-  Core AI gateway.
+  Core AI chat engine for xAI Workspace.
 
   **Commands:**
     `@openclaw status`    — process health
