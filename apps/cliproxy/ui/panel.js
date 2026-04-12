@@ -828,7 +828,7 @@
       });
       xai.on("cliproxy.oauth.callback", (data) => {
         if (!oauthConnecting || !oauthState) return;
-        if (!data?.state || data.state === oauthState) {
+        if (data?.state && data.state === oauthState) {
           let immediateOAuthPoll = function() {
             oauthPollTimer = setTimeout(async () => {
               if (!oauthConnecting || !oauthState) return;
