@@ -88,7 +88,7 @@ interface XaiSDK {
   tools: XaiTools;
   on(event: string, handler: (data: any) => void): void;
   request(action: string, data: any): Promise<any>;
-  requestApproval(action: string, description: string, details?: string): Promise<boolean>;
+  requestApproval(action: string, description: string, details?: string): Promise<'approved' | 'denied' | 'timeout'>;
   log(message: string, data?: any): void;
 }
 

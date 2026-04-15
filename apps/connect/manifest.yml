@@ -2,9 +2,27 @@ slug: connect
 identifier: com.xshopper.connect
 kind: app
 name: Connect
-description: OAuth connection manager — view and manage connected third-party services (Google, GitHub, Microsoft, Slack, and more)
+description: OAuth connection manager — view and manage connected third-party services (Google, GitHub, Microsoft, Slack, and more). Also exposes MCP tools so other agents can read tokens and connection state.
 icon: "\U0001F517"
-version: 1.0.0
+version: 1.1.0
+
+startup: "node index.js"
+
+# MCP server — registered at runtime via POST /api/mcp/register on startup.
+# This app proxies all OAuth requests to the router over HTTPS, so it does
+# not need a localhost network permission entry.
+mcp:
+  transport: http
+  port: 3470
+  tools:
+    - name: get_token
+      description: "Get the current access token for a connected provider (refreshes server-side if expiring)."
+    - name: list_connections
+      description: "List all of the user's OAuth connections."
+    - name: is_connected
+      description: "Check whether the user has an active connection for a given provider."
+    - name: disconnect
+      description: "Remove the user's OAuth connection for a given provider."
 
 service:
   order: 15

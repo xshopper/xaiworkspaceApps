@@ -409,11 +409,22 @@ function render() {
           </div>
         </div>
 
-        ${!state.tokenStatus?.has_refresh_token ? `
-        <div class="form-card">
-          <p class="form-hint" style="color: var(--fg-danger, #ef4444);">No refresh token — auto-refresh will not work. Re-connect via OAuth to get a refresh token.</p>
-        </div>
-        ` : ''}
+        ${!state.tokenStatus?.has_refresh_token ? (() => {
+          // All five CLI subscription providers (Claude, Codex, Gemini, Qwen, iFlow)
+          // do issue refresh tokens via the upstream cli-proxy-api binary, so a
+          // missing refresh token here means the OAuth flow was incomplete or the
+          // user pasted a manual short-lived token. Surface that honestly instead
+          // of claiming auto-refresh is broken for the provider.
+          const provider = tokenCardProvider || 'this provider';
+          const label = providerLabel(provider);
+          return `
+          <div class="form-card">
+            <p class="form-hint" style="color: var(--fg-warning, #f59e0b);">
+              No refresh token stored for ${escapeHtml(label)}. Auto-refresh will be unavailable until you re-connect via the OAuth flow (manual token pastes do not include a refresh token).
+            </p>
+          </div>
+          `;
+        })() : ''}
 
         <!-- Manual token paste (collapsed fallback) -->
         <details class="form-card" ${manualTokenOpen ? 'open' : ''} ontoggle="__onTokenToggle()">

@@ -36,6 +36,32 @@ const BRIDGE_URL = (() => {
 })();
 const CWD = process.env.AGENT_CWD || process.env.HOME || '/root';
 
+// ── Address (Sprint 2 track C) ──────────────────────────────────────────────
+// Locked format: domain/worker_id/app_identifier/instance_name
+//   domain        — from DOMAIN (SDK v1 contract; set by router, with bridge fallback)
+//   worker_id     — from WORKSPACE_INSTANCE_ID (or INSTANCE_ID), unique per worker
+//   app_identifier— manifest identifier, com.xaiworkspace.agent
+//   instance_name — APP_INSTANCE_NAME (this process)
+const APP_IDENTIFIER = 'com.xaiworkspace.agent';
+const DOMAIN = process.env.DOMAIN || 'xaiworkspace.com';
+const WORKER_ID = process.env.WORKSPACE_INSTANCE_ID || process.env.INSTANCE_ID || 'unknown';
+const IS_PUBLIC = PARAMS.public === true;
+// Private agents are addressed as domain/worker_id/app_identifier/instance_name —
+// running with WORKER_ID='unknown' means messages can't be routed back to us.
+// Public agents can start without one because they're addressable by short form.
+if (!IS_PUBLIC && WORKER_ID === 'unknown') {
+  console.error('[agent] FATAL: WORKSPACE_INSTANCE_ID/INSTANCE_ID is not set — private agents require a worker id for addressable routing.');
+  process.exit(1);
+}
+// Public agents publish their short form externally, but the worker-scoped
+// form is still valid for internal/loopback delivery.
+const OWN_ADDRESS = IS_PUBLIC
+  ? `${DOMAIN}/${APP_IDENTIFIER}/${AGENT_NAME}`
+  : `${DOMAIN}/${WORKER_ID}/${APP_IDENTIFIER}/${AGENT_NAME}`;
+
+// Address parsing/local-target detection lives in the bridge; the agent only
+// needs to know its OWN_ADDRESS and pass it as `from` on every outbound call.
+
 // ---------------------------------------------------------------------------
 // Persona system prompts
 // ---------------------------------------------------------------------------
@@ -64,14 +90,27 @@ function getSystemPrompt() {
 
   return `${base}
 
+## Your Address
+
+You are: ${OWN_ADDRESS}
+
+The address format is: domain/worker_id/app_identifier/instance_name
+(public agents use the short form domain/app_identifier/instance_name).
+
 ## Inter-Agent Messaging
 
-You can send messages to other agents by running this command:
-curl -s -X POST ${BRIDGE_URL}/api/app-message \\
-  -H 'Content-Type: application/json' \\
-  -d '{"from":"${AGENT_NAME}","to":"TARGET_AGENT_NAME","message":"YOUR_MESSAGE"}'
+To send a message to another agent, post the full target address to the
+bridge's agent-message endpoint:
 
-Replace TARGET_AGENT_NAME with the agent's instance name (e.g. "pm-01", "dev-01").
+curl -s -X POST ${BRIDGE_URL}/api/agent-message \\
+  -H 'Content-Type: application/json' \\
+  -d '{"from":"${OWN_ADDRESS}","to":"DOMAIN/WORKER_ID/com.xaiworkspace.agent/TARGET_NAME","message":"YOUR_MESSAGE"}'
+
+Your address is ${OWN_ADDRESS} — always pass it as the 'from' field.
+For agents on the same worker, addresses use the same DOMAIN/WORKER_ID prefix
+and delivery is fast (loopback). Cross-worker messages are routed via the
+router. Public agents are addressable as DOMAIN/com.xaiworkspace.agent/NAME.
+
 Messages are freetext — write naturally.`;
 }
 
@@ -134,7 +173,13 @@ async function processMessage(msg) {
   try {
     let prompt;
 
-    if (msg.type === 'app_message') {
+    if (msg.type === 'agent_message_deliver') {
+      // New address-based envelope (Sprint 2 track C)
+      const fromAddress = msg.envelope?.from || 'unknown';
+      const text = msg.payload?.message || JSON.stringify(msg.payload);
+      prompt = `Message from agent ${fromAddress}:\n${text}`;
+    } else if (msg.type === 'app_message') {
+      // Legacy short-form (kept for in-flight migrations)
       const fromName = msg.from?.name || msg.from || 'unknown';
       prompt = `Message from agent "${fromName}":\n${msg.payload?.message || JSON.stringify(msg.payload)}`;
     } else if (msg.type === 'user_input') {

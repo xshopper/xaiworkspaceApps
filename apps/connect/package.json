@@ -1,0 +1,11 @@
+{
+  "name": "connect",
+  "version": "1.1.0",
+  "description": "OAuth connection manager mini-app — MCP server that proxies to the router OAuth connections API",
+  "type": "module",
+  "main": "index.js",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}

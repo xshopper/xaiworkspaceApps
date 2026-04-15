@@ -8,15 +8,17 @@ A reference guide for developers building apps, agents, skills, tools, and plugi
 
 1. [Overview](#overview)
 2. [Quick Start](#quick-start)
-3. [Manifest Reference](#manifest-reference)
-4. [App Kinds](#app-kinds)
-5. [Permissions](#permissions)
-6. [Triggers](#triggers)
-7. [Persona System](#persona-system)
-8. [Sandbox and Security](#sandbox-and-security)
-9. [Publishing](#publishing)
-10. [API Reference](#api-reference)
-11. [Examples](#examples)
+3. [Trust tiers](#trust-tiers)
+4. [Developing a system mini-app](#developing-a-system-mini-app)
+5. [Manifest Reference](#manifest-reference)
+6. [App Kinds](#app-kinds)
+7. [Permissions](#permissions)
+8. [Triggers](#triggers)
+9. [Persona System](#persona-system)
+10. [Sandbox and Security](#sandbox-and-security)
+11. [Publishing](#publishing)
+12. [API Reference](#api-reference)
+13. [Examples](#examples)
 
 ---
 
@@ -78,6 +80,121 @@ That's it. The platform validates the manifest, provisions the app against your 
 
 ---
 
+## Trust tiers
+
+Every mini-app runs in one of two **trust tiers**, declared by the `trust` field on the manifest. The tier determines how the app is loaded, where it runs, which permission strings are honoured, and whether an end user can uninstall it.
+
+| Tier | Default? | Rendered as | Source | Installable by user? | Can declare `system.*` permissions? |
+|------|----------|-------------|--------|----------------------|--------------------------------------|
+| `user` | Yes | Iframe sandbox (`SandboxFrameComponent`) | Any GitHub repo, installed via `/install` or the marketplace | Yes — can be installed and uninstalled freely | No — `system.*` strings are parsed but ignored at runtime |
+| `system` | No | Native Angular standalone component in the host app | In-tree, bundled with the frontend build | No — always present, cannot be uninstalled | Yes — declared in the manifest and (in M1) runtime-enforced |
+
+### User tier (default)
+
+User-tier apps are what the SDK has shipped since day one. They live in external repositories, are downloaded on install, run inside a locked-down iframe sandbox, and talk to the host via the `xai.*` bridge API. Every `xai.*` call is checked against the declared `permissions` block before the sandbox bridge forwards it. `trust: 'user'` is the default — omitting the field is equivalent to setting it.
+
+User-tier apps are the right choice for anything you want to ship, share, or install per-user. Virtually all examples in this SDK are user-tier.
+
+### System tier
+
+System-tier apps are first-party UI surfaces that the host app needs to ship as part of its own build — think App Manager, Instance Manager, Agent Studio. They are not sandboxed: they are ordinary Angular standalone components rendered directly by the mini-app shell, and they can inject any service the frontend already provides.
+
+Because system-tier rendering bypasses the sandbox entirely, system apps are subject to strict source constraints:
+
+- **In-tree only (M0).** System mini-apps must live under `xaiworkspace-frontend/src/app/system-mini-apps/<slug>/` and be registered in the frontend's `SYSTEM_MINI_APPS` array. Out-of-tree system apps are **not supported** in M0.
+- **No install/uninstall lifecycle.** System apps are seeded into the registry at bootstrap via an `APP_INITIALIZER`. They appear in the same `installed()` signal as user apps (projected into the `AppInstall` shape with a synthetic `install_id` of `system:<identifier>`), but they cannot be removed by users and are not stored in the router database.
+- **Trust is implicit.** In M0 there is no cryptographic verification — trust is granted by virtue of the app existing in the frontend source tree and passing code review. The manifest parser accepts `trust: 'system'` without a signature check and emits a warning to the backend log.
+
+Forward-looking: **M1.1** will add Ed25519 signature verification for out-of-tree system mini-apps, so customers can ship their own system-tier pages (typically their own dashboard or back-office surfaces) by uploading a signed bundle. Until that ships, treat `trust: 'system'` as "only the xAI Workspace frontend team can add these".
+
+---
+
+## Developing a system mini-app
+
+This section is for the frontend / core-team developer adding a new system mini-app to the `xaiworkspace-frontend` repo. If you are building a third-party app, skip to the Manifest Reference below — you want `trust: 'user'` (the default) and everything else in this SDK applies as written.
+
+### Step-by-step
+
+1. **Create the directory.** Everything for the mini-app lives in `xaiworkspace-frontend/src/app/system-mini-apps/<slug>/`. Pick a kebab-case slug; it will also be used for `@mention` routing.
+
+2. **Write the Angular component.** Create `<slug>.component.ts` as a standalone Angular component. Follow the usual frontend conventions (signals, `inject()`, `@if` / `@for` control flow, SCSS with CSS custom properties). The component is loaded via `ManifestBridgeService`, which constructs a `ServiceDescriptor` from the definition and renders it inside `ServiceHostComponent` — there is no iframe, so you can import services, router, auth, `ChatService`, etc. freely.
+
+3. **Write the manifest.** Create `manifest.ts` in the same directory and export a `SystemMiniAppDefinition`. The shape mirrors the user-tier manifest but is a TypeScript object (not YAML), and it bundles the component class alongside the metadata:
+
+   ```ts
+   // xaiworkspace-frontend/src/app/system-mini-apps/my-service/manifest.ts
+   import type { SystemMiniAppDefinition } from '../../mini-apps/mini-app.types';
+   import { MyServiceComponent } from './my-service.component';
+
+   export const MY_SERVICE: SystemMiniAppDefinition = {
+     identifier: 'com.xaiworkspace.my-service',
+     slug: 'my-service',
+     name: 'My Service',
+     description: 'Short description shown in the service selector and App Manager.',
+     icon: 'wrench',
+     version: '0.1.0',
+     kind: 'app',
+     manifest: {
+       trust: 'system',
+       // Declare as a shell service so it appears in the topbar service selector.
+       service: { order: 200 },
+       // Optional: declare system.* permissions for documentation.
+       // These are not runtime-enforced in M0 — see the permission matrix.
+       permissions: {
+         // @ts-expect-error — system.* strings are documentary in M0.
+         system: ['system.instances.read'],
+       },
+     },
+     component: MyServiceComponent,
+   };
+   ```
+
+4. **Register the app.** Add the export to `xaiworkspace-frontend/src/app/system-mini-apps/index.ts` by appending it to the `SYSTEM_MINI_APPS` array:
+
+   ```ts
+   import { INFRASTRUCTURE_MINI_APP } from './infrastructure/manifest';
+   import { APP_MANAGER_MINI_APP } from './app-manager/manifest';
+   import { MY_SERVICE } from './my-service/manifest';
+
+   export const SYSTEM_MINI_APPS: SystemMiniAppDefinition[] = [
+     INFRASTRUCTURE_MINI_APP,
+     APP_MANAGER_MINI_APP,
+     MY_SERVICE,
+   ];
+   ```
+
+   The `appConfig` already wires a `provideAppInitializer` that iterates `SYSTEM_MINI_APPS` and calls `MiniAppRegistryService.registerSystemMiniApp(def)` for each entry at bootstrap — you do not need to touch `app.config.ts`.
+
+5. **Rebuild the frontend.** Run `pnpm build` (or `pnpm start` in dev). On next bootstrap the mini-app appears in the combined `installed()` list and — if the manifest declares `service: {...}` — in the topbar service selector. The Infrastructure system mini-app under `src/app/system-mini-apps/infrastructure/` is the minimal reference implementation — its `manifest.ts` is intentionally small and covers the common case (service registration, trust tier, permissions). Copy its shape for the fastest start:
+
+   ```ts
+   // src/app/system-mini-apps/infrastructure/manifest.ts (skeleton)
+   export const INFRASTRUCTURE_MINI_APP: SystemMiniAppDefinition = {
+     identifier: 'com.xaiworkspace.infrastructure',
+     slug: 'infrastructure',
+     name: 'Infrastructure',
+     description: 'Manage workers, bridges, and cloud providers',
+     icon: '🖥️',
+     version: '1.0.0',
+     kind: 'app',
+     manifest: {
+       trust: 'system',
+       permissions: { resources: ['instances.read', 'instances.write'] },
+       service: { order: 90 },
+     },
+     component: InstancesServiceComponent,
+   };
+   ```
+
+### Runtime expectations
+
+- System mini-apps participate in the same `@mention` flow as user apps (`@<slug>` routes to the component via `ManifestBridgeService`).
+- They should **not** call the `xai.*` sandbox bridge — that API only exists inside iframes. Use normal Angular DI (`inject(ChatService)`, `inject(MiniAppRegistryService)`, etc.) instead.
+- They inherit the host app's auth state, theme, i18n locale, and routing. CSS custom properties from the active brand palette are in scope.
+- Because rendering happens inside the frontend bundle, a buggy system mini-app will crash the host shell. Test it the same way you would any other first-party page.
+
+---
+
 ## Manifest Reference
 
 Every manifest is a YAML file named `manifest.yml` at the root of the app directory.
@@ -99,6 +216,7 @@ These fields apply to all five kinds.
 | `sandbox` | string | No | `strict` | Execution isolation level: `strict`, `relaxed`, or `none` |
 | `identifier` | string | No | — | Reverse-domain identifier (e.g. `com.xshopper.my-app`). Used for registry uniqueness. |
 | `categories` | array | No | — | Marketplace category tags (e.g. `[productivity, communication]`) |
+| `trust` | string | No | `user` | Trust tier this app runs in: `user` (iframe-sandboxed, default) or `system` (native component, in-tree only). See the "Trust tiers" section. |
 
 ### Optional Fields
 
@@ -107,13 +225,14 @@ These fields apply to all five kinds.
 | `permissions` | object | Declared resource, chat, and integration access |
 | `triggers` | array | Events or schedules that activate the component |
 | `persona` | object | Personality, rules, and knowledge injected into the system prompt |
+| `parameters` | array | Install-time user-supplied values (see "Manifest parameters" below). Surfaced to the user via the install dialog and injected into the running app via the `APP_PARAMETERS` env var |
 | `approvalRequired` | array | Action names that require explicit user confirmation before execution |
 | `dependencies` | array | Slugs of skills or tools this component requires |
 | `entrypoint` | string | Inline JavaScript executed inside the sandbox for programmatic components |
 | `ui` | object | UI panel configuration. When present, the platform renders the app in a side panel alongside chat |
-| `startup` | string | Shell command to run the app on EC2 boot. Registered as a pm2 process by the openclaw ecosystem generator. Blocked chars: `$`, `;`, `\|`, `` ` ``, `>`, `<` (standalone `&` blocked, `&&` allowed). Max 500 chars |
+| `startup` | string | Shell command to run the app on worker boot. Registered as a pm2 process by the openclaw ecosystem generator. Blocked chars: `$`, `;`, `\|`, `` ` ``, `>`, `<` (standalone `&` blocked, `&&` allowed). Max 500 chars |
 | `cleanup` | string | Shell command to stop/remove the app's processes (run on uninstall or app stop). Max 500 chars |
-| `port` | integer | Network port the app listens on. Conflicts checked against other apps and reserved ports (22, 19001, 19443). Sets `APP_PORT` env var |
+| `port` | integer | Network port the app listens on. Conflicts checked against other apps. Reserved port: 19001. Ports below 1025 are also rejected (PORT_MIN). Sets `APP_PORT` env var |
 | `configurable` | boolean | Whether the app has user-editable configuration |
 | `singleton` | boolean | When `true`, only one install per instance is allowed. Use for infrastructure services that bind a fixed port |
 | `authProvider` | string | OAuth provider name for MCP servers (lowercase alphanumeric). Router injects OAuth tokens per-call |
@@ -198,6 +317,108 @@ Each operation in `operations`:
 | Field | Type | Description |
 |-------|------|-------------|
 | `hooks` | array | Lifecycle points to intercept: `pre`, `post`, `error`, `approval` |
+
+---
+
+## Manifest parameters
+
+Apps and agents can declare install-time parameters that the user fills in via the install dialog. The platform validates the values against the declared schema, persists them on the install record, and injects them into the running process as the `APP_PARAMETERS` environment variable (see "Runtime environment" below).
+
+The `parameters` field is an array of parameter objects. Each parameter uses a JSON Schema subset.
+
+**Allowed `type` values:**
+
+| `type` | Description |
+|--------|-------------|
+| `string` | Free-form text. Optionally constrained by `pattern`, `enum`, `min`, `max` (length) |
+| `number` | Numeric value. Optionally constrained by `min`, `max` |
+| `boolean` | True or false. Rendered as a checkbox |
+| `select` | Single choice from `enum`. Rendered as a dropdown |
+| `password` | Sensitive text. Masked in the UI but stored on the install record |
+| `secret` | Sensitive text. Masked in the UI **and** never stored on the install record — kept only in the secrets vault and surfaced via `OC_SECRET_HOST`. Use this for API keys and tokens |
+
+**Schema fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Parameter identifier. Used as the key in `APP_PARAMETERS`. Required. Must match `/^[a-zA-Z_][a-zA-Z0-9_]*$/` |
+| `label` | string | Human-readable label shown in the install dialog. Defaults to `name` |
+| `type` | string | One of the allowed types above. Required |
+| `description` | string | Help text shown under the field in the install dialog |
+| `required` | boolean | If `true`, the user must provide a value to install. Default `false` |
+| `default` | any | Default value. Type must match `type`. Used as the initial dialog value |
+| `enum` | array | List of allowed values. Required for `type: select`. Each entry may be a primitive or `{ value, label }` |
+| `pattern` | string | Regex (ECMAScript syntax) the value must match. Only applies to `type: string` and `type: password` |
+| `min` | number | For `type: number`: minimum value (inclusive). For `type: string`/`password`: minimum length |
+| `max` | number | For `type: number`: maximum value (inclusive). For `type: string`/`password`: maximum length |
+
+Validation runs **at manifest publish time** (rejecting malformed schemas) **and at install time** (rejecting user input that fails the schema). The running app can trust that values in `APP_PARAMETERS` already conform to the declared schema.
+
+**Example: string with pattern**
+
+```yaml
+parameters:
+  - name: subdomain
+    label: Public subdomain
+    type: string
+    required: true
+    pattern: "^[a-z][a-z0-9-]{2,30}$"
+    description: Lowercase letters, digits, and hyphens. 3–31 characters.
+```
+
+**Example: select with enum and default**
+
+```yaml
+parameters:
+  - name: model
+    label: Default model
+    type: select
+    default: claude-sonnet-4-6
+    enum:
+      - { value: claude-haiku-4-5-20251001, label: Haiku (Fast) }
+      - { value: claude-sonnet-4-6, label: Sonnet (Balanced) }
+      - { value: claude-opus-4-6, label: Opus (Best) }
+```
+
+**Example: number with min and max**
+
+```yaml
+parameters:
+  - name: pollIntervalSeconds
+    label: Poll interval (seconds)
+    type: number
+    default: 60
+    min: 5
+    max: 3600
+    description: How often to check the upstream feed.
+```
+
+---
+
+## Runtime environment
+
+When the bridge spawns a mini-app process (via pm2), it injects a fixed set of environment variables. These are the only env vars the SDK guarantees — additional values must come from the `APP_PARAMETERS` JSON.
+
+This list is **frozen for SDK v1**. Adding or renaming a variable requires a major SDK version bump.
+
+| Variable | Type | Example | Description | Always present? |
+|----------|------|---------|-------------|-----------------|
+| `APP_PORT` | number | `4001` | TCP port the app should listen on if it serves HTTP/WS. Set from `manifest.port` | Only if the manifest declares `port` |
+| `APP_INSTANCE_NAME` | string | `alice` | The user-chosen instance name. For default (parameterless) installs the value is `default` | Always |
+| `APP_PARAMETERS` | JSON string | `{"persona":"PM","model":"sonnet"}` | Install-time parameter values, JSON-encoded. Empty object `{}` if the manifest declares no parameters | Always |
+| `APP_IDENTIFIER` | string | `com.xshopper.agent` | The reverse-domain identifier from `manifest.identifier` | Always |
+| `APP_DATA_DIR` | path | `/data/com.xshopper.agent/alice` | Sandboxed per-instance data directory. The bridge creates it before launch and the app may read/write freely inside it | Always |
+| `BRIDGE_URL` | URL | `http://127.0.0.1:19099` | Local bridge HTTP base. Use this to call `POST /api/messages` to send chat messages, or any other bridge-local endpoint | Always |
+| `WORKER_ID` | string | `w_xyz123` | The worker identifier the bridge is registered as on the router | Always |
+| `DOMAIN` | string | `xaiworkspace.com` | The domain the user is operating under (relevant for white-label deployments) | Always (may be empty string in legacy installs) |
+| `USER_ID` | string | `cognito-sub-uuid` | The Cognito sub of the user that installed the app | Always |
+| `OC_SECRET_HOST` | URL | `http://127.0.0.1:19099/api/secrets` | Endpoint for fetching values declared as `type: secret` parameters. Apps must fetch secrets at runtime from this URL — secrets are never inlined into `APP_PARAMETERS` | Always |
+
+**Notes:**
+
+- Do **not** assume any other env var is present. The host shell may leak unrelated variables, but the SDK contract covers only the list above.
+- The set is frozen for v1. Future additions live behind feature negotiation or a new SDK major version.
+- For local development outside a bridge, set these manually (e.g. via a `.env` file) so your app behaves the same way it will in production.
 
 ---
 
@@ -435,7 +656,7 @@ sandbox: strict
 
 ### MCP Server
 
-An MCP (Model Context Protocol) server is a mini app that advertises tools to the LLM natively via LiteLLM. MCP servers are stateless on EC2 — OAuth tokens are injected per-call by the router from the database.
+An MCP (Model Context Protocol) server is a mini app that advertises tools to the LLM natively via LiteLLM. MCP servers are stateless — OAuth tokens are injected per-call by the router from the database.
 
 Use MCP servers when:
 - You want to expose external API capabilities as LLM tools
@@ -785,6 +1006,27 @@ The sandbox communicates with the host via a structured postMessage protocol. Yo
 | `host:chat.message` | Incoming user message |
 | `host:shutdown` | Instructing the sandbox to terminate cleanly |
 
+**Router-relayed approval flow** (used by mini-apps running on the bridge, not in-page sandboxes):
+
+| WS message | Direction | Payload | Description |
+|------------|-----------|---------|-------------|
+| `approval_request` | router → frontend | `{ request_id, app_identifier, title, description, danger_level, timeout_ms }` | App is requesting user confirmation. Frontend opens an inline modal in the chat area with the title, description, danger badge and a countdown timer. While the modal is open, user input in the chat textbox is queued. |
+| `approval_response` | frontend → router | `{ request_id, result: 'approved' \| 'denied' \| 'timeout' }` | Sent when the user clicks Approve, clicks Deny, or the timeout (default 60 seconds) elapses. The router forwards the result back to the originating mini-app, which receives it via `xai.on('approval', handler)`. |
+
+`danger_level` is one of `low`, `medium`, `high` — controls the badge colour on the modal. `timeout_ms` defaults to 60000 (60 seconds) if omitted; on timeout the response is auto-`denied` with `result: 'timeout'`.
+
+App-side example:
+
+```javascript
+const result = await new Promise((resolve) => {
+  xai.on('approval', (msg) => {
+    if (msg.request_id === myRequestId) resolve(msg.result);
+  });
+  xai.requestApproval('email.send', 'Send 14 outbound emails to leads in pipeline?');
+});
+// result === 'approved' | 'denied' | 'timeout'
+```
+
 ### SDK API Reference
 
 The platform SDK is injected as `window.xai` into every sandbox iframe. Key methods:
@@ -798,9 +1040,9 @@ The platform SDK is injected as `window.xai` into every sandbox iframe. Key meth
 | `xai.storage.delete(key)` | Delete a key from storage |
 | `xai.storage.list(prefix?)` | List storage entries matching a prefix |
 | `xai.chat.send(text, buttons?)` | Send a chat message with optional button rows |
-| `xai.on(event, handler)` | Listen for events: `ready`, `chat.message`, `shutdown`, `trigger.*` |
+| `xai.on(event, handler)` | Listen for events: `ready`, `chat.message`, `shutdown`, `trigger.*`, `approval` |
 | `xai.request(action, data)` | Generic permission-scoped platform request |
-| `xai.requestApproval(action, desc)` | Request user confirmation. Returns `Promise<boolean>` |
+| `xai.requestApproval(action, desc)` | Request user confirmation. Returns `Promise<'approved' \| 'denied' \| 'timeout'>`. The `approval` event also fires with the same result so apps can use `xai.on('approval', handler)` for fire-and-forget flows. |
 | `xai.tools.execute(slug, op, params?)` | Execute an installed tool operation |
 | `xai.tools.list()` | List available tools |
 | `xai.memory.get(cat, key)` | Read from persistent memory |
@@ -1595,3 +1837,148 @@ export async function setup(): Promise<Page> {
 ```bash
 D24_API_KEY=your_key npm test
 ```
+
+---
+
+## Permission matrix
+
+This section is the authoritative reference for every permission string a mini-app can declare in its `manifest.yml`. The earlier "Permissions" section above gives the high-level groups; this matrix documents exactly what each permission grants, which component enforces it, and what gotchas apply.
+
+Permissions are split into six categories: **chat**, **resources**, **device**, **integrations**, **network**, and **system**. Only the permissions listed below are accepted by the manifest parser (`xaiworkspace-backend/src/manifest-parser.js → VALID_PERMISSIONS`). Unknown permission strings are rejected at install time with a validation error — see "Rejection behaviour" at the bottom of this section.
+
+### Matrix
+
+| Permission | Category | Grants | Enforced by | Notes |
+|-----------|----------|--------|-------------|-------|
+| `chat.send` | chat | App may post messages into the user's chat via the sandbox bridge (`xai.chat.send()` / WS `type: send_message`) | Router WS gateway, sandbox bridge | Messages are attributed to the app, not the user. Counts against the user's rate limit. |
+| `chat.read` | chat | App may read the current session's message history via `xai.chat.history()` | Router WS gateway | Only the active session; cross-session reads require `chat.listen` + explicit session targeting. |
+| `chat.listen` | chat | App receives a real-time stream of every inbound user message on the session | Router WS gateway, workspace gateway | Required for passive agents (e.g. `support-bot`, `email-manager`). Sent as `mirror`-style events. |
+| `tool.execute` | chat | App may invoke any installed tool (e.g. `@github.createIssue`) via `xai.tools.call()` | Workspace gateway tool router | Subject to the called tool's own OAuth/permission check. |
+| `tool.list` | chat | App may enumerate the list of installed tools and their manifests | Workspace gateway | Read-only; does not imply `tool.execute`. |
+| `memory.read` | chat | App may read from the user's long-term AI memory store | Workspace memory store | Scoped to the current user; cannot read other users' memory. |
+| `memory.write` | chat | App may write to the user's long-term AI memory store | Workspace memory store | Writes are tagged with the app's slug for attribution/audit. |
+| `storage` | resources | Key-value storage scoped to `{app_domain, chat_id, table_name='__kv__'}` via `xai.storage.set/get()` | Router `DataService` (`/api/data/:appDomain/:table`), Postgres `oc_app_data` JSONB | Isolated per app — one app cannot read another app's storage regardless of permissions. |
+| `email` | resources | App may read and send email via the user's connected email account (Gmail/Outlook via OAuth) | Router OAuth connector registry, workspace email plugin | Requires the user to have connected an email provider first (`@connect gmail`). `email.send` should be listed in `approvalRequired` for high-risk flows. |
+| `database` | resources | Structured (tabled) data persistence via `xai.db.query/insert/update()` — row-level schema, not plain KV | Router `DataService` (`/api/data/:appDomain/:table`), Postgres `oc_app_data` JSONB tables | Same backing store as `storage`, but exposes the table-level API. Per-app isolation is enforced by `app_domain` column filter. |
+| `functions` | resources | App may invoke serverless functions registered on the workspace instance | Workspace function runner | Intended for heavy compute (image processing, PDF generation). Functions run in a separate pm2 process. |
+| `instance_files` | resources | App may read files from the workspace instance's shared filesystem (used by `file-viewer`) | Router `container-files` route, bridge → instance file proxy | Read-only. Currently limited to the workspace instance root; path traversal is blocked by the router. |
+| `device.camera` | device | Native camera access via Capacitor `@capacitor/camera` | Frontend Capacitor plugin, OS permission prompt | Triggers an OS-level consent dialog on first use. Mobile only; no-op on web. |
+| `device.location` | device | GPS / IP-based geolocation via Capacitor `@capacitor/geolocation` | Frontend Capacitor plugin, OS permission prompt | Triggers an OS consent dialog. Accuracy depends on device. |
+| `device.clipboard` | device | Read/write the system clipboard via `@capacitor/clipboard` | Frontend Capacitor plugin | No OS prompt on most platforms — consider this a trusted capability. |
+| `device.share` | device | Trigger the native share sheet via `@capacitor/share` | Frontend Capacitor plugin | No user data granted; just UI capability. |
+| `device.info` | device | Read device metadata (OS, version, model, screen size) via `@capacitor/device` | Frontend Capacitor plugin | No OS prompt; treated as low-sensitivity. |
+| `device.network` | device | Read network connectivity state via `@capacitor/network` | Frontend Capacitor plugin | Read-only (online/offline, connection type). |
+| `device.files` | device | Access local filesystem via `@capacitor/filesystem` | Frontend Capacitor plugin, scoped sandbox directory | Read-only unless `storage` is also declared. Restricted to the app's sandbox directory — cannot escape to user's broader filesystem. |
+| `integrations.google` | integrations | Reserved. Access to the user's connected Google account (Sheets, Gmail, Drive, Calendar) | Router OAuth connector registry (`oauth-connectors.js`), per-tool scopes | **Not listed in `VALID_PERMISSIONS`** — declaring it today causes a manifest validation error. OAuth integrations are currently exposed via the `@connect` mini-app rather than declared permissions; this row documents the intended future shape. |
+| `integrations.github` | integrations | Reserved. Access to the user's connected GitHub account (repos, issues, PRs) | Router OAuth connector registry | **Not listed in `VALID_PERMISSIONS`** — declaring it today causes a manifest validation error. Same status as `integrations.google`. |
+| `integrations.linkedin` | integrations | Reserved. Access to the user's connected LinkedIn account (profile, company data) | Router OAuth connector registry | **Not listed in `VALID_PERMISSIONS`**. Same status as `integrations.google`. |
+| `integrations.slack` | integrations | Reserved. Access to the user's connected Slack workspace(s) | Router OAuth connector registry | **Not yet listed in `VALID_PERMISSIONS`** — reserved for a future sprint. Declaring this today causes a manifest validation error. |
+| `integrations.stripe` | integrations | Reserved. Access to the user's connected Stripe account | Router OAuth connector registry | Reserved, same status as `slack`. |
+| `integrations.notion` | integrations | Reserved. Access to the user's connected Notion workspace | Router OAuth connector registry | Reserved, same status as `slack`. |
+| `integrations.microsoft` | integrations | Reserved. Access to the user's connected Microsoft 365 account (Outlook, OneDrive, Teams) | Router OAuth connector registry | Reserved, same status as `slack`. |
+
+> **Today's OAuth story.** None of the `integrations.*` strings above appear in `manifest-parser.js VALID_PERMISSIONS` — the currently-accepted permission set is `storage`, `email`, `database`, `functions`, `chat.send`, `chat.read`, `chat.listen`, `tool.execute`, `tool.list`, `memory.read`, `memory.write`, and the `device.*` family. Third-party OAuth access (Google, GitHub, LinkedIn, Slack, Stripe, Notion, Microsoft) is exposed to mini-apps **via the `@connect` mini-app**: the user runs `@connect google` once, the token is stored in the router connector registry, and any app calling `xai.tools.call('google.sheets.append', ...)` reuses that token. The permission matrix rows are kept here as a forward-looking contract for when per-permission scoping lands.
+| `network.localhost:<PORT>` | network | Allows `xai.http()` to proxy HTTP requests to `http://localhost:<PORT>` on the workspace instance. Router resolves the instance IP server-side and forwards the request. | Router `sandbox-proxy.js` (`POST /api/sandbox-proxy`), port whitelist derived from this manifest field | Multiple entries allowed (`network: [localhost:4001, localhost:3470]`). Only the loopback hostnames `localhost`, `::1`, and `127.0.0.0/8` are accepted — any other hostname is rejected with 403. Port **must** match exactly; there is no port range syntax. |
+| `network.<hostname>` | network | Reserved for future support of outbound egress to a specific external host | Router sandbox proxy | **Not yet implemented.** Only `localhost:<PORT>` form is accepted today. Exact-match hostnames may be added in a future version; no wildcard (`*.example.com`) support is planned. |
+| `system.instances.read` | system | App may list the user's workspace instances, their status, and metadata | **M0:** Implicit — system mini-apps access services via direct Angular DI. Permission strings are documentary. **M1 (forward):** Runtime-enforced via a capability proxy layer (deferred). | **System-trust only.** `trust: 'system'` is required for the string to be meaningful; on `trust: 'user'` apps the parser accepts it but runtime calls go nowhere. |
+| `system.instances.write` | system | App may start, stop, restart, or delete workspace instances on behalf of the user | **M0:** Implicit — system mini-apps access services via direct Angular DI. Permission strings are documentary. **M1 (forward):** Runtime-enforced via a capability proxy layer (deferred). | System-trust only. Used by the in-tree Instance Manager system mini-app. |
+| `system.apps.read` | system | App may list all installed mini-apps across all of the user's instances | **M0:** Implicit — system mini-apps access services via direct Angular DI. Permission strings are documentary. **M1 (forward):** Runtime-enforced via a capability proxy layer (deferred). | System-trust only. |
+| `system.apps.write` | system | App may install, uninstall, or update other mini-apps | **M0:** Implicit — system mini-apps access services via direct Angular DI. Permission strings are documentary. **M1 (forward):** Runtime-enforced via a capability proxy layer (deferred). | System-trust only. The install confirmation UI is bypassed for system-trust callers — be extremely cautious with how this is exposed. |
+
+### Declaring permissions in the manifest
+
+Permissions live under a top-level `permissions` key, grouped by category. The parser only inspects the `resources` array strictly (every entry must be in `VALID_PERMISSIONS`); other categories are structurally validated but individual values are looser.
+
+```yaml
+name: expense-tracker
+kind: app
+version: 1.0.0
+
+permissions:
+  resources: [storage, database]          # storage + tabled persistence
+  chat: [chat.send, chat.read]            # post + read history
+  network: [localhost:3472]               # sandbox HTTP proxy to app port 3472
+```
+
+> Note: don't declare `integrations: [google]` (or any other `integrations.*`) today — the manifest parser accepts but ignores it at runtime; the permission has no enforcement. Use the `@connect` mini-app flow instead (see the note below the permission matrix).
+
+Device permissions are currently listed under `resources` (historical quirk — kept for backwards compatibility), e.g. `resources: [storage, device.location, device.camera]`. A future manifest version may move them under a dedicated `device:` key; the parser will continue to accept the old form.
+
+### Escalation via `approvalRequired`
+
+Some operations are too sensitive to run silently even when the relevant permission is granted. For those, the app lists **action names** (free-form strings, `noun.verb` by convention) under `approvalRequired`. When the app invokes such an action, the sandbox bridge pauses the call and sends an `approval_request` WS message to the frontend, which renders an inline modal. The call only proceeds if the user clicks "Approve".
+
+```yaml
+permissions:
+  resources: [email, storage]
+
+approvalRequired:
+  - email.send          # every outbound email needs a click-through
+  - email.delete        # destructive
+  - report.export       # sensitive data leaving the workspace
+```
+
+Action names are app-defined — the platform does not interpret them beyond displaying them in the modal and matching them against the list at call time. The approval modal also shows a `danger_level` (`low` | `medium` | `high`) that the app can include in the `approval_request` message; unknown levels default to `high`.
+
+See the "Sandbox bridge protocol" section above for the full `approval_request` / `approval_response` message shapes.
+
+### Per-install vs per-app permissions
+
+Permissions are declared at the **app** level (in the manifest) and are **static for the lifetime of the installed version**. They are identical across all installs of the same app version — including multi-instance installs with different `name` parameters (see "Multi-Instance App Manager" in the project docs).
+
+This means:
+- A single app cannot request "more" permissions for one of its named instances than another — the manifest is the authoritative set.
+- Upgrading an app to a new version that adds permissions triggers a re-consent prompt at the next install or update (planned for Sprint 3).
+- Revoking permissions on an installed app requires uninstalling it; there is no per-install runtime toggle today.
+
+OAuth integration scopes (e.g. "which Google scopes does `integrations.google` actually grant?") are a separate concern negotiated at `@connect` time, not at install time — the permission only says "this app may use the connected Google account", the scopes say "in the following ways".
+
+### Rejection behaviour
+
+What happens when an app requests or uses a permission it shouldn't:
+
+1. **Manifest validation — unknown permission string**: `parseAndValidate()` in `manifest-parser.js` rejects the manifest with an error like `Unknown permission: "filesystem". Valid: storage, email, database, ...`. The install fails at the router with a 400 response before any files are downloaded to the bridge. Example error body:
+   ```json
+   { "field": "permissions.resources[2]", "message": "Unknown permission: 'filesystem'" }
+   ```
+
+2. **Runtime — permission not in manifest**: The sandbox bridge and router middleware check each capability call against the declared `permissions` before executing it. Calls to an undeclared capability **fail silently inside the sandbox** — the call resolves with `undefined` / empty result, no exception is thrown, and no user-facing error appears. This is deliberate: a malicious app should not be able to probe which permissions are in effect by catching exceptions.
+
+3. **Runtime — network port not in manifest**: `sandbox-proxy.js` resolves the app record from DB (not from client-provided data) and checks the requested port against `permissions.network`. Mismatched ports return HTTP 403 with `Port N not allowed. Allowed: [...]`. Ports not in loopback range (non-`localhost`/`::1`/`127.x`) return 403 with `Only localhost URLs allowed via proxy`.
+
+4. **Runtime — `system.*` on a non-system-trust app**: The router API routes that gate system permissions return HTTP 403 with `system permission requires trust=system`. The check is based on the `trust` field of the app's signed manifest record, not on a header or cookie the app controls.
+
+5. **Runtime — `approvalRequired` action invoked without approval**: The sandbox bridge intercepts the call, emits `approval_request`, and blocks the calling coroutine until the frontend replies with `approval_response`. If the user clicks "Deny" (or the 5s…10min timeout expires), the call resolves with an `ApprovalDeniedError` thrown inside the sandbox — this is one of the few cases where an exception **is** thrown rather than silent failure, because the app has opted in to knowing.
+
+### Summary of enforcement layers
+
+From outermost to innermost:
+
+| Layer | What it checks | When |
+|-------|---------------|------|
+| Manifest parser (`manifest-parser.js`) | Declared permission strings are in `VALID_PERMISSIONS` | At install / update time |
+| Router API middleware | `system.*` permissions require `trust: system` | Per-request, on gated endpoints |
+| Router `sandbox-proxy.js` | Network port matches `permissions.network` entries; hostname is loopback | Per `xai.http()` call |
+| Router `DataService` | Storage/database calls are scoped to `{app_domain, chat_id}` | Per read/write |
+| Router OAuth connector registry | User has connected the relevant provider before `integrations.*` is usable | Per tool / integration call |
+| Sandbox bridge (iframe host) | Capability calls match declared `permissions` categories | Per `xai.*` SDK call |
+| Workspace memory / tool router | `memory.*` and `tool.*` calls attributed + scoped | Per call |
+| Frontend approval modal | `approvalRequired` actions pause until user consents | Per sensitive call |
+
+No single layer is sufficient on its own — the defense-in-depth is deliberate. In particular, **never assume the sandbox bridge check alone is enough**: anything security-relevant must also be enforced server-side (at the router or workspace gateway), because a compromised sandbox iframe can forge any `xai.*` call.
+
+---
+
+## System mini-apps: M0 limitations
+
+The trust-tier pipeline is intentionally minimal in M0. The following constraints will be lifted in later milestones, but today's callers should plan around them:
+
+- **In-tree only.** System mini-apps must live inside `xaiworkspace-frontend/src/app/system-mini-apps/<slug>/` and be registered in `SYSTEM_MINI_APPS`. The router will not load a system mini-app from an external repo, and there is no publish-time signing step.
+- **No permission sandboxing.** Because the component is rendered directly in the frontend bundle, it can `inject()` any Angular service the host app provides. The `system.*` permission strings are documentary — they describe intent and help reviewers, but nothing blocks an in-tree component from calling services outside its declared permissions.
+- **Build-time bundled, not lazy-loaded per mini-app.** Every system mini-app adds to the frontend initial bundle (mindful of the 2MB warn / 2.5MB error budget). There is no per-mini-app code splitting in M0.
+- **No hot-swap or per-install versioning.** System mini-app version strings are metadata only — upgrading a system mini-app means shipping a new frontend build. Users cannot pin, roll back, or run two versions side-by-side.
+- **No per-user install state.** System mini-apps appear for every authenticated user and cannot be uninstalled. Per-user enable/disable would need to be layered on top by the host (e.g. via feature flags).
+- **No router database record.** System mini-apps are not represented in the router's `mini_apps` / `app_installs` tables. APIs that enumerate "installed apps" server-side will not include them — the combined list only exists in the frontend registry.
+
+Out-of-tree system mini-apps are planned for **M1.1**, which will add Ed25519 signature verification, a publish flow for signed system bundles, and a runtime capability proxy that enforces `system.*` permission strings instead of relying on code review. Until then, any new system-tier surface must go through the `xaiworkspace-frontend` repo and be reviewed like first-party code.
+

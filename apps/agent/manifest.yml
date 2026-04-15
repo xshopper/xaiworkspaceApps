@@ -26,6 +26,14 @@ parameters:
       - { value: "claude-haiku-4-5-20251001", label: "Haiku (Fast)" }
       - { value: "claude-sonnet-4-6", label: "Sonnet (Balanced)" }
       - { value: "claude-opus-4-6", label: "Opus (Best)" }
+  - name: public
+    label: Public Agent
+    type: boolean
+    default: false
+    description: >
+      Make this agent addressable by anyone in the same domain as
+      `domain/com.xaiworkspace.agent/<name>` (no worker_id). Names must be
+      unique across the domain when public.
 
 permissions:
   resources: [storage]

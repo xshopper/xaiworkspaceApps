@@ -42,6 +42,13 @@ if (fs.existsSync(SECRETS_FILE)) {
 
 const ROUTER_URL     = process.env.ROUTER_URL || 'https://router.xaiworkspace.com';
 const INSTANCE_ID    = process.env.INSTANCE_ID || '';
+// Domain this worker belongs to — used by agent_message routing as the first
+// segment of the address (domain/worker_id/app_identifier/instance_name).
+// Derived from ROUTER_URL hostname when BRIDGE_DOMAIN is not provided.
+const BRIDGE_DOMAIN  = process.env.BRIDGE_DOMAIN || (() => {
+  try { return new URL(ROUTER_URL).hostname.replace(/^router\./, '').replace(/^test-router\./, 'test.'); }
+  catch { return 'xaiworkspace.com'; }
+})();
 const INSTANCE_TOKEN = process.env.INSTANCE_TOKEN || '';
 const CHAT_ID        = process.env.CHAT_ID || '';
 const GW_PASSWORD    = process.env.GW_PASSWORD || '';
@@ -190,6 +197,8 @@ function connectRouter() {
       case 'scan':          handleScan(); return;
       case 'config_update': handleConfigUpdate(msg); return;
       case 'app_message':   handleAppMessage(msg); return;
+      case 'agent_message_deliver': handleAgentMessageDeliver(msg); return;
+      case 'agent_message_error':   handleAgentMessageError(msg); return;
       case 'user_input':    handleUserInput(msg); return;
     }
 
@@ -477,6 +486,53 @@ function handleAppMessage(msg) {
   });
 }
 
+// ── Inter-worker agent messaging (Sprint 2 track C) ─────────────────────────
+//
+// Address format: domain/worker_id/app_identifier/instance_name (private)
+//                 domain/app_identifier/instance_name           (public)
+//
+// All deliveries from the router arrive as agent_message_deliver. We resolve
+// the local target by (app_identifier, instance_name) and POST to its
+// loopback HTTP server. The slug is derived from the app_identifier suffix
+// (e.g. com.xaiworkspace.agent → agent).
+
+function parseAgentAddress(addr) {
+  if (typeof addr !== 'string') return null;
+  const parts = addr.split('/');
+  if (parts.length === 4) return { domain: parts[0], workerId: parts[1], appIdentifier: parts[2], instanceName: parts[3], kind: 'private' };
+  if (parts.length === 3) return { domain: parts[0], workerId: null, appIdentifier: parts[1], instanceName: parts[2], kind: 'public' };
+  return null;
+}
+
+function slugFromIdentifier(identifier) {
+  if (!identifier) return 'agent';
+  const dot = identifier.lastIndexOf('.');
+  return dot >= 0 ? identifier.slice(dot + 1) : identifier;
+}
+
+function handleAgentMessageDeliver(msg) {
+  const parsed = parseAgentAddress(msg?.envelope?.to);
+  if (!parsed) {
+    console.warn('[workspace-agent] agent_message_deliver: invalid `to` address');
+    return;
+  }
+  const slug = slugFromIdentifier(parsed.appIdentifier);
+  deliverToLocalApp(slug, parsed.instanceName, msg).then(ok => {
+    if (!ok) {
+      console.warn(`[workspace-agent] Could not deliver agent_message to ${slug}/${parsed.instanceName}`);
+      // Notify router that delivery failed; the message was already audited as
+      // 'delivered' on the way in, so emit a follow-up failure for ops visibility.
+      send({ type: 'agent_message_error', envelope: msg.envelope, reason: 'local_delivery_failed' });
+    }
+  });
+}
+
+function handleAgentMessageError(msg) {
+  // The router replied that an outbound message could not be delivered.
+  // For now just log — a future iteration can surface this to the source agent.
+  console.warn(`[workspace-agent] agent_message_error from router: ${msg?.reason || 'unknown'} for msg_id=${msg?.envelope?.msg_id}`);
+}
+
 function handleUserInput(msg) {
   const toName = msg.to?.name;
   const toSlug = msg.to?.slug;
@@ -746,7 +802,47 @@ async function handleInstallApp(msg) {
 
     // Determine pm2 process name: slug for default, slug--name for named instances
     const processName = instName === 'default' ? slug : `${slug}--${instName}`;
+    // SDK v1 frozen lifecycle env-var set — the router builds the full set
+    // in notifyGatewayAppInstall() / ws-gateway reconciliation and delivers
+    // it via install_app.env. Local defaults (BRIDGE_DOMAIN, WORKSPACE_INSTANCE_ID)
+    // layer underneath so legacy installs without router-provided env still
+    // get addressing context, and APP_INSTANCE_NAME/APP_PARAMETERS are
+    // explicitly set last so they can never be clobbered by a stale env map.
+    // Only whitelisted keys from msg.env are merged (defense-in-depth against
+    // arbitrary env injection if the router payload shape ever drifts).
+    const SDK_V1_ENV_KEYS = new Set([
+      'APP_PORT',
+      'APP_INSTANCE_NAME',
+      'APP_PARAMETERS',
+      'APP_IDENTIFIER',
+      'APP_DATA_DIR',
+      'BRIDGE_URL',
+      'WORKER_ID',
+      'DOMAIN',
+      'USER_ID',
+      'OC_SECRET_HOST',
+    ]);
+    const routerEnv = {};
+    if (env && typeof env === 'object') {
+      for (const [k, v] of Object.entries(env)) {
+        if (SDK_V1_ENV_KEYS.has(k) && v != null) {
+          routerEnv[k] = String(v).replace(/[\n\r\0]/g, '');
+        }
+      }
+    }
     const instanceEnv = {
+      // Router-provided SDK v1 vars (APP_IDENTIFIER, APP_DATA_DIR, BRIDGE_URL,
+      // WORKER_ID, DOMAIN, USER_ID, OC_SECRET_HOST, APP_PORT when applicable).
+      ...routerEnv,
+      // Sprint 2 track C — let mini-apps compose their own full address.
+      // DOMAIN is the SDK v1 contract key; fall back to the bridge-derived
+      // hostname when the router didn't supply it. BRIDGE_DOMAIN is retained
+      // as an internal-only alias for legacy bridge logic.
+      DOMAIN: routerEnv.DOMAIN || BRIDGE_DOMAIN,
+      BRIDGE_DOMAIN,
+      WORKSPACE_INSTANCE_ID: INSTANCE_ID,
+      // These must always reflect this specific install/instance, so they
+      // override anything from routerEnv.
       APP_INSTANCE_NAME: instName,
       APP_PARAMETERS: JSON.stringify(parameters || {}),
     };
@@ -774,8 +870,22 @@ async function handleInstallApp(msg) {
       // Normal install — start pm2 process with instance env vars
       const ecoFile = path.join(appDir, 'ecosystem.config.js');
       if (instName === 'default' && fs.existsSync(ecoFile)) {
-        // Default instance with existing ecosystem file — use as-is
-        await execFileAsync('pm2', ['start', ecoFile, '--update-env'], { timeout: 30000 });
+        // Default instance with existing ecosystem file — use as-is, but
+        // merge the SDK v1 instanceEnv into the child process env so that
+        // pm2's --update-env picks up router-supplied values (DOMAIN,
+        // USER_ID, WORKER_ID, APP_DATA_DIR, etc.). Without this merge the
+        // ecosystem file's static `env` block wins and router env is lost
+        // after bridge reconnect/reconciliation.
+        await execFileAsync('pm2', ['start', ecoFile, '--update-env'], {
+          timeout: 30000,
+          env: { ...process.env, ...instanceEnv },
+        });
+        // Follow-up restart ensures the running process picks up the merged
+        // env if pm2 decided the app was already online.
+        await execFileAsync('pm2', ['restart', processName, '--update-env'], {
+          timeout: 30000,
+          env: { ...process.env, ...instanceEnv },
+        }).catch(() => {});
       } else if (manifest?.startup) {
         const startupCmd = String(manifest.startup).trim();
         if (startupCmd.length > MAX_COMMAND_LENGTH || /[;`|><&\n\r]|\$[\({]/.test(startupCmd)) {
@@ -1180,6 +1290,90 @@ const healthServer = http.createServer(async (req, res) => {
     }
 
     httpJson(res, 200, { ok: true });
+    return;
+  }
+
+  // POST /api/agent-message — Sprint 2 track C inter-worker agent messaging
+  // Body: { to: "domain/worker_id/com.xaiworkspace.agent/name", message, from? }
+  //
+  // Identity model: the caller is a loopback pm2 process. We DO NOT trust
+  // a caller-supplied `from` for impersonation: the workerId in `from` is
+  // always rewritten to this bridge's own INSTANCE_ID before forwarding.
+  // The instance_name component must match a port file the bridge manages
+  // (defence in depth — confirms an app actually owns the name it claims).
+  if (req.method === 'POST' && url === '/api/agent-message') {
+    const body = await readHttpBody(req);
+    const to = body?.to;
+    const text = body?.message;
+    const from = body?.from; // required — agent must pass its own full address
+    if (!to || !text || !from) {
+      httpJson(res, 400, { ok: false, error: 'to, from, and message are required' });
+      return;
+    }
+    const fromParsed = parseAgentAddress(from);
+    const toParsed = parseAgentAddress(to);
+    if (!fromParsed || !toParsed) {
+      httpJson(res, 400, { ok: false, error: 'invalid address format' });
+      return;
+    }
+
+    // Authoritative `from` rewrite: bind workerId to this bridge's identity.
+    // Private addresses with a mismatched workerId are rejected outright.
+    if (fromParsed.kind === 'private' && fromParsed.workerId && fromParsed.workerId !== INSTANCE_ID) {
+      httpJson(res, 403, { ok: false, error: 'from.workerId does not match this bridge' });
+      return;
+    }
+
+    // Cross-check the instance_name component against a managed port file.
+    // The slug derives from the app_identifier (e.g. com.xaiworkspace.agent → agent).
+    // If no port file exists, the app isn't actually running on this bridge under
+    // that name — reject to prevent a co-tenant from impersonating it.
+    // TODO: replace with a per-app HMAC token (env var injected at pm2 start)
+    //       once the bridge tracks pm2 process identity directly.
+    try {
+      const slug = slugFromIdentifier(fromParsed.appIdentifier);
+      if (!slug || !SAFE_SLUG.test(slug) || !fromParsed.instanceName || !SAFE_SLUG.test(fromParsed.instanceName)) {
+        httpJson(res, 400, { ok: false, error: 'invalid from address components' });
+        return;
+      }
+      const portFile = `/tmp/${slug}-${fromParsed.instanceName}.port`;
+      if (!fs.existsSync(portFile)) {
+        httpJson(res, 403, { ok: false, error: 'from.instanceName not running on this bridge' });
+        return;
+      }
+    } catch {
+      httpJson(res, 403, { ok: false, error: 'from validation failed' });
+      return;
+    }
+
+    // Rebuild canonical from string from the (now-trusted) parts. For private
+    // addresses we hard-bind workerId; for public we leave as-is.
+    const trustedFrom = fromParsed.kind === 'private'
+      ? `${fromParsed.domain || BRIDGE_DOMAIN}/${INSTANCE_ID}/${fromParsed.appIdentifier}/${fromParsed.instanceName}`
+      : `${fromParsed.domain || BRIDGE_DOMAIN}/${fromParsed.appIdentifier}/${fromParsed.instanceName}`;
+
+    const envelope = {
+      from: trustedFrom,
+      to,
+      ts: Date.now(),
+      msg_id: (globalThis.crypto?.randomUUID?.() || require('crypto').randomUUID()),
+    };
+    const wireMsg = { type: 'agent_message_deliver', envelope, payload: { message: text } };
+
+    // Same-worker shortcut: avoid the router round-trip entirely.
+    const sameWorker = toParsed.kind === 'private'
+      && toParsed.domain === BRIDGE_DOMAIN
+      && toParsed.workerId === INSTANCE_ID;
+    if (sameWorker) {
+      const slug = slugFromIdentifier(toParsed.appIdentifier);
+      const ok = await deliverToLocalApp(slug, toParsed.instanceName, wireMsg);
+      httpJson(res, ok ? 200 : 502, { ok, route: 'local' });
+      return;
+    }
+
+    // Otherwise: forward via WS to the router for cross-worker routing.
+    send({ type: 'agent_message', envelope, payload: { message: text } });
+    httpJson(res, 200, { ok: true, route: 'router' });
     return;
   }
 
