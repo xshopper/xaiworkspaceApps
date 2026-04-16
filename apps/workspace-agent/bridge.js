@@ -202,6 +202,8 @@ function connectRouter() {
       case 'install_app':   handleInstallApp(msg); return;
       case 'uninstall_app': handleUninstallApp(msg); return;
       case 'uninstall_app_instance': handleUninstallAppInstance(msg); return;
+      case 'stop_app_instance':  handleStopAppInstance(msg); return;
+      case 'start_app_instance': handleStartAppInstance(msg); return;
       case 'restart_app':   handleRestartApp(msg); return;
       case 'list_apps':     handleListApps(msg); return;
       case 'exec':          handleExec(msg); return;
@@ -649,7 +651,7 @@ function _appTokenKey(slug, instanceName) {
 }
 
 async function handleInstallApp(msg) {
-  const { id, slug, identifier, artifactUrl, sourceUrl, subdir, env, manifest, name: instanceName, parameters, upgrade } = msg;
+  const { id, slug, identifier, artifactUrl, sourceUrl, subdir, env, manifest, name: instanceName, parameters, upgrade, callbackToken } = msg;
   const instName = instanceName || 'default';
 
   // Validate instance name (defense-in-depth — router also validates)
@@ -838,6 +840,7 @@ async function handleInstallApp(msg) {
       'APP_IDENTIFIER',
       'APP_DATA_DIR',
       'APP_BRIDGE_TOKEN',
+      'APP_CALLBACK_TOKEN',
       'BRIDGE_URL',
       'WORKER_ID',
       'DOMAIN',
@@ -875,6 +878,14 @@ async function handleInstallApp(msg) {
       APP_INSTANCE_NAME: instName,
       APP_PARAMETERS: JSON.stringify(parameters || {}),
       APP_BRIDGE_TOKEN: appBridgeToken,
+      // Batch D #F1 — per-install callback token issued by the router and
+      // attached to install_app WS messages as msg.callbackToken. Apps MUST
+      // forward it as X-App-Callback-Token when POSTing to
+      // /api/app-callback/:slug/installed|progress|failed. Router falls
+      // through the env whitelist path too (APP_CALLBACK_TOKEN in routerEnv)
+      // but we prefer the top-level field for clarity and so legacy router
+      // payloads that only set one or the other still work.
+      APP_CALLBACK_TOKEN: callbackToken || routerEnv.APP_CALLBACK_TOKEN || '',
     };
 
     // Upgrade mode: code already re-downloaded above, restart ALL instances.
@@ -896,6 +907,7 @@ async function handleInstallApp(msg) {
           APP_INSTANCE_NAME: upgradeInstName,
           APP_PARAMETERS: JSON.stringify(parameters || {}),
           APP_BRIDGE_TOKEN: freshToken,
+          APP_CALLBACK_TOKEN: callbackToken || routerEnv.APP_CALLBACK_TOKEN || '',
         };
         if (ecoFile && fs.existsSync(ecoFile)) {
           await execFileAsync('pm2', ['start', ecoFile, '--update-env'], {
@@ -1081,6 +1093,102 @@ function handleUninstallAppInstance(msg) {
 
   send({ type: 'uninstall_result', slug, name: name || 'default', status: 'ok' });
   console.log(`[workspace-agent] Instance stopped: ${procName}`);
+}
+
+// ── stop_app_instance / start_app_instance ─────────────────────────────────
+//
+// Router-initiated pm2 process lifecycle. Backend endpoints
+// POST /api/mini-apps/:slug/stop and /start emit these WS messages via
+// _gatewayClients.sendToInstance so the pm2 process state tracks the DB
+// status column. The frontend relies on the DB column, but the user-facing
+// effect (the app actually being stopped) requires pm2 to stop the process.
+
+async function handleStopAppInstance(msg) {
+  const { slug, name } = msg;
+  if (!slug || !SAFE_SLUG.test(slug)) {
+    send({ type: 'stop_app_instance_result', slug, name, status: 'error', error: 'Invalid slug' });
+    return;
+  }
+  if (name && name !== 'default' && !/^[a-z0-9][a-z0-9-]*$/.test(name)) {
+    send({ type: 'stop_app_instance_result', slug, name, status: 'error', error: 'Invalid instance name' });
+    return;
+  }
+  // Prefer the router-supplied processName (defense-in-depth: router already
+  // computes it via the same `${slug}--${name}` convention), fall back to
+  // recomputing if absent.
+  const processName = typeof msg.processName === 'string' && msg.processName
+    ? msg.processName
+    : ((!name || name === 'default') ? slug : `${slug}--${name}`);
+
+  try {
+    await execFileAsync('pm2', ['stop', processName], { timeout: 10000 });
+    console.log(`[workspace-agent] pm2 stop ${processName}`);
+    send({ type: 'stop_app_instance_result', slug, name: name || 'default', status: 'ok' });
+  } catch (err) {
+    const errMsg = err?.stderr?.toString?.() || err?.message || 'pm2 stop failed';
+    // Treat "process not found" as a soft failure — the DB is the source of
+    // truth for "stopped", and a missing pm2 entry is already effectively stopped.
+    if (/not found|does not exist|no process/i.test(errMsg)) {
+      console.warn(`[workspace-agent] pm2 stop ${processName}: no such process (treating as ok)`);
+      send({ type: 'stop_app_instance_result', slug, name: name || 'default', status: 'ok', note: 'process not running' });
+    } else {
+      console.error(`[workspace-agent] pm2 stop ${processName} failed:`, errMsg);
+      send({ type: 'stop_app_instance_result', slug, name: name || 'default', status: 'error', error: errMsg.slice(0, 500) });
+    }
+  }
+}
+
+async function handleStartAppInstance(msg) {
+  const { slug, name } = msg;
+  if (!slug || !SAFE_SLUG.test(slug)) {
+    send({ type: 'start_app_instance_result', slug, name, status: 'error', error: 'Invalid slug' });
+    return;
+  }
+  if (name && name !== 'default' && !/^[a-z0-9][a-z0-9-]*$/.test(name)) {
+    send({ type: 'start_app_instance_result', slug, name, status: 'error', error: 'Invalid instance name' });
+    return;
+  }
+  const processName = typeof msg.processName === 'string' && msg.processName
+    ? msg.processName
+    : ((!name || name === 'default') ? slug : `${slug}--${name}`);
+
+  try {
+    // pm2 start on an existing stopped process brings it back online.
+    await execFileAsync('pm2', ['start', processName], { timeout: 15000 });
+    console.log(`[workspace-agent] pm2 start ${processName}`);
+    send({ type: 'start_app_instance_result', slug, name: name || 'default', status: 'ok' });
+    return;
+  } catch (err) {
+    const errMsg = err?.stderr?.toString?.() || err?.message || '';
+    // If pm2 never had this process (e.g. was deleted), fall through to
+    // restart via the ecosystem file, which will re-create it.
+    if (!/not found|does not exist|no process|script not found/i.test(errMsg)) {
+      console.error(`[workspace-agent] pm2 start ${processName} failed:`, errMsg);
+      send({ type: 'start_app_instance_result', slug, name: name || 'default', status: 'error', error: errMsg.slice(0, 500) });
+      return;
+    }
+  }
+
+  // Fallback: try to (re)start via ecosystem file if pm2 start didn't know
+  // about the process.
+  try {
+    const appDir = path.join(APPS_DIR, `com.xshopper.${slug}`);
+    const instName = name || 'default';
+    const ecoFile = instName === 'default'
+      ? path.join(appDir, 'ecosystem.config.js')
+      : path.join(appDir, `ecosystem.${instName}.config.js`);
+    if (fs.existsSync(ecoFile)) {
+      await execFileAsync('pm2', ['start', ecoFile, '--update-env'], { timeout: 30000 });
+      console.log(`[workspace-agent] pm2 start ${ecoFile} (fallback for ${processName})`);
+      send({ type: 'start_app_instance_result', slug, name: instName, status: 'ok', note: 'restarted via ecosystem file' });
+      return;
+    }
+    send({ type: 'start_app_instance_result', slug, name: instName, status: 'error', error: 'process not found and no ecosystem file available' });
+  } catch (err) {
+    const errMsg = err?.message || 'pm2 start fallback failed';
+    console.error(`[workspace-agent] pm2 start fallback for ${processName} failed:`, errMsg);
+    send({ type: 'start_app_instance_result', slug, name: name || 'default', status: 'error', error: errMsg.slice(0, 500) });
+  }
 }
 
 // ── restart_app ─────────────────────────────────────────────────────────────

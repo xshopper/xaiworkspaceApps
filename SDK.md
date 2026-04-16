@@ -414,6 +414,7 @@ This list is **frozen for SDK v1**. Adding or renaming a variable requires a maj
 | `USER_ID` | string | `cognito-sub-uuid` | The Cognito sub of the user that installed the app | Always |
 | `OC_SECRET_HOST` | URL | `http://127.0.0.1:19099/api/secrets` | Endpoint for fetching values declared as `type: secret` parameters. Apps must fetch secrets at runtime from this URL — secrets are never inlined into `APP_PARAMETERS` | Always |
 | `APP_BRIDGE_TOKEN` | string (hex) | `3f7a…` | Per-install HMAC token. Apps MUST present this as the `X-App-Bridge-Token` header when calling `POST /api/agent-message`. The bridge generates a fresh 32-byte token per install/upgrade and compares with `timingSafeEqual`. Never log, persist, or forward this value to other apps | Always |
+| `APP_CALLBACK_TOKEN` | string (hex) | `b8e1…` | Per-install token issued by the router for posting installation callback events to `POST /api/app-callback/:slug/installed`, `/progress`, `/failed`. Apps MUST send it as the `X-App-Callback-Token` header. The router validates with `timingSafeEqual` against `oc_app_installs.callback_token`. Never log, persist, or forward this value | Always |
 
 **Notes:**
 
@@ -996,6 +997,8 @@ The sandbox communicates with the host via a structured postMessage protocol. Yo
 | `sandbox:approval` | Requesting user confirmation for an `approvalRequired` action |
 | `sandbox:render` | Injecting safe HTML into the host UI |
 | `sandbox:http` | Proxied HTTP request (requires `permissions.network` declaration) |
+
+**Slug tagging requirement (Batch D #D7):** Every `sandbox:*` message except the bootstrap `sandbox:ready` must include a `slug` field matching the app's own slug. The host instance drops messages whose declared `slug` does not match the instance it was initialised for, as a defence against cross-iframe impersonation. The SDK shim learns the authoritative slug from `host:init.appSlug` and tags all outbound messages automatically — if you craft `postMessage` calls by hand, you are responsible for including it.
 
 **Host to sandbox:**
 

@@ -90,27 +90,16 @@ export class RevenueLogger {
   // ── Internal ───────────────────────────────────────────────────────────
 
   async _flush() {
-    if (this.buffer.length === 0 || !this.routerUrl) return;
-
-    const batch = this.buffer.splice(0, MAX_BUFFER_SIZE);
-    try {
-      const resp = await fetch(`${this.routerUrl}/api/market/revenue/batch`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.apiKey}`,
-        },
-        body: JSON.stringify({ records: batch }),
-      });
-
-      if (!resp.ok) {
-        // Put records back on failure so they're not lost
-        console.error(`[revenue] Flush failed (${resp.status}), re-queuing ${batch.length} records`);
-        this.buffer.unshift(...batch);
-      }
-    } catch (err) {
-      console.error('[revenue] Flush error:', err.message);
-      this.buffer.unshift(...batch);
+    // DISABLED: POST /api/market/revenue/batch was removed as a fraud
+    // vector (caller-controlled buyer_id + unbounded _cents fields).
+    // Revenue logging will be re-introduced in M1 via a trusted internal
+    // ingest path derived from LiteLLM spend records. Until then we drop
+    // buffered records on the floor to prevent unbounded memory growth.
+    if (this.buffer.length === 0) return;
+    const dropped = this.buffer.length;
+    this.buffer = [];
+    if (dropped > 0) {
+      console.warn(`[revenue] Revenue logging disabled — dropped ${dropped} records (M1 re-introduces via trusted ingest)`);
     }
   }
 }
