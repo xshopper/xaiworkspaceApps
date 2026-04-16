@@ -1,5 +1,16 @@
 #!/usr/bin/env node
-// ── Workspace Agent v1.1.0 ──────────────────────────────────────────────────
+// ── Workspace Agent v1.1.0 (CURRENT production ECS/Docker path) ────────────
+//
+// ROLE: This is the active workspace agent for the app platform. It runs
+// as a pm2 process inside every ECS Fargate workspace container and every
+// local Docker workspace container. It is shipped as a mini-app
+// (`apps/workspace-agent` in xaiworkspaceApps) and installed via the
+// install_app flow triggered from `src/routes/ws-gateway.js` on every
+// gateway auth (see WORKSPACE_AGENT_VERSION self-update logic).
+//
+// It is NOT the same file as `xaiworkspace-backend/bridge.js`, which is
+// the legacy EC2 cloud-init bridge for deprecated `i-*` instances.
+//
 // Single WS bridge between the router and all installed apps inside the
 // workspace container.
 //
@@ -25,7 +36,7 @@ const { execFileSync } = require('child_process');
 const { promisify } = require('util');
 const execFileAsync = promisify(require('child_process').execFile);
 const { spawn } = require('child_process');
-const { randomUUID } = require('crypto');
+const { randomUUID, randomBytes, timingSafeEqual } = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const WebSocket = require('ws');
@@ -627,6 +638,16 @@ function isUrlTrusted(url) {
 
 const _installingApps = new Set();
 
+// Per-app HMAC tokens, keyed by `${slug}--${instanceName}`. Injected at pm2
+// start as APP_BRIDGE_TOKEN; validated on `/api/agent-message` via the
+// `X-App-Bridge-Token` header. Primary identity boundary for inter-agent
+// messaging (port-file check remains as defense-in-depth).
+const _appBridgeTokens = new Map();
+
+function _appTokenKey(slug, instanceName) {
+  return `${slug}--${instanceName || 'default'}`;
+}
+
 async function handleInstallApp(msg) {
   const { id, slug, identifier, artifactUrl, sourceUrl, subdir, env, manifest, name: instanceName, parameters, upgrade } = msg;
   const instName = instanceName || 'default';
@@ -816,6 +837,7 @@ async function handleInstallApp(msg) {
       'APP_PARAMETERS',
       'APP_IDENTIFIER',
       'APP_DATA_DIR',
+      'APP_BRIDGE_TOKEN',
       'BRIDGE_URL',
       'WORKER_ID',
       'DOMAIN',
@@ -830,6 +852,13 @@ async function handleInstallApp(msg) {
         }
       }
     }
+    // Generate a fresh per-install HMAC token. This is the primary identity
+    // boundary for /api/agent-message — the app presents it as
+    // X-App-Bridge-Token and the bridge compares via timingSafeEqual.
+    // Rotates on every (re)install or upgrade.
+    const appBridgeToken = randomBytes(32).toString('hex');
+    _appBridgeTokens.set(_appTokenKey(slug, instName), appBridgeToken);
+
     const instanceEnv = {
       // Router-provided SDK v1 vars (APP_IDENTIFIER, APP_DATA_DIR, BRIDGE_URL,
       // WORKER_ID, DOMAIN, USER_ID, OC_SECRET_HOST, APP_PORT when applicable).
@@ -845,6 +874,7 @@ async function handleInstallApp(msg) {
       // override anything from routerEnv.
       APP_INSTANCE_NAME: instName,
       APP_PARAMETERS: JSON.stringify(parameters || {}),
+      APP_BRIDGE_TOKEN: appBridgeToken,
     };
 
     // Upgrade mode: code already re-downloaded above, restart ALL instances
@@ -949,6 +979,13 @@ function handleUninstallApp(msg) {
     try { execFileSync('pm2', ['delete', slug], { timeout: 10000 }); } catch {}
     try { execFileSync('pm2', ['save', '--force'], { timeout: 5000 }); } catch {}
 
+    // Invalidate all per-instance HMAC tokens for this slug (default + named).
+    for (const key of _appBridgeTokens.keys()) {
+      if (key === _appTokenKey(slug, 'default') || key.startsWith(`${slug}--`)) {
+        _appBridgeTokens.delete(key);
+      }
+    }
+
     // Clean up env vars
     try {
       const envKeysFile = path.join(appDir, '.env-keys');
@@ -997,6 +1034,9 @@ function handleUninstallAppInstance(msg) {
     execFileSync('pm2', ['stop', procName], { timeout: 10000 });
     execFileSync('pm2', ['delete', procName], { timeout: 10000 });
   } catch {}
+
+  // Invalidate the HMAC token for this specific instance.
+  _appBridgeTokens.delete(_appTokenKey(slug, name || 'default'));
 
   // Remove instance-specific ecosystem file if it exists
   const appDir = path.join(APPS_DIR, `com.xshopper.${slug}`);
@@ -1324,18 +1364,33 @@ const healthServer = http.createServer(async (req, res) => {
       return;
     }
 
-    // Cross-check the instance_name component against a managed port file.
-    // The slug derives from the app_identifier (e.g. com.xaiworkspace.agent → agent).
-    // If no port file exists, the app isn't actually running on this bridge under
-    // that name — reject to prevent a co-tenant from impersonating it.
-    // TODO: replace with a per-app HMAC token (env var injected at pm2 start)
-    //       once the bridge tracks pm2 process identity directly.
+    // Primary identity boundary: per-app HMAC token injected at pm2 start as
+    // APP_BRIDGE_TOKEN. The caller must present it as X-App-Bridge-Token; we
+    // compare via timingSafeEqual against the token we generated for the
+    // claimed `from` instance. Port-file existence remains as
+    // defense-in-depth.
     try {
       const slug = slugFromIdentifier(fromParsed.appIdentifier);
       if (!slug || !SAFE_SLUG.test(slug) || !fromParsed.instanceName || !SAFE_SLUG.test(fromParsed.instanceName)) {
         httpJson(res, 400, { ok: false, error: 'invalid from address components' });
         return;
       }
+
+      // HMAC token check (primary).
+      const presentedToken = req.headers['x-app-bridge-token'];
+      const expectedToken = _appBridgeTokens.get(_appTokenKey(slug, fromParsed.instanceName));
+      if (typeof presentedToken !== 'string' || !expectedToken) {
+        httpJson(res, 403, { ok: false, error: 'missing or unknown bridge token' });
+        return;
+      }
+      const a = Buffer.from(presentedToken, 'utf8');
+      const b = Buffer.from(expectedToken, 'utf8');
+      if (a.length !== b.length || !timingSafeEqual(a, b)) {
+        httpJson(res, 403, { ok: false, error: 'bridge token mismatch' });
+        return;
+      }
+
+      // Port-file cross-check (defense in depth).
       const portFile = `/tmp/${slug}-${fromParsed.instanceName}.port`;
       if (!fs.existsSync(portFile)) {
         httpJson(res, 403, { ok: false, error: 'from.instanceName not running on this bridge' });
@@ -1356,22 +1411,13 @@ const healthServer = http.createServer(async (req, res) => {
       from: trustedFrom,
       to,
       ts: Date.now(),
-      msg_id: (globalThis.crypto?.randomUUID?.() || require('crypto').randomUUID()),
+      msg_id: randomUUID(),
     };
-    const wireMsg = { type: 'agent_message_deliver', envelope, payload: { message: text } };
 
-    // Same-worker shortcut: avoid the router round-trip entirely.
-    const sameWorker = toParsed.kind === 'private'
-      && toParsed.domain === BRIDGE_DOMAIN
-      && toParsed.workerId === INSTANCE_ID;
-    if (sameWorker) {
-      const slug = slugFromIdentifier(toParsed.appIdentifier);
-      const ok = await deliverToLocalApp(slug, toParsed.instanceName, wireMsg);
-      httpJson(res, ok ? 200 : 502, { ok, route: 'local' });
-      return;
-    }
-
-    // Otherwise: forward via WS to the router for cross-worker routing.
+    // All agent messages route via the router — even when sender and
+    // receiver live on the same worker. This keeps `handleAgentMessage`'s
+    // audit row (oc_agent_messages) and rate-limit enforcement uniformly
+    // applied. The previous same-worker loopback shortcut bypassed both.
     send({ type: 'agent_message', envelope, payload: { message: text } });
     httpJson(res, 200, { ok: true, route: 'router' });
     return;

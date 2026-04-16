@@ -24,9 +24,11 @@
  */
 
 import http from 'node:http';
-import { readFileSync } from 'node:fs';
+import crypto from 'node:crypto';
+import { readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -51,6 +53,41 @@ if (!API_KEY) {
 }
 
 const FETCH_TIMEOUT_MS = 10_000;
+
+// ─── MCP inbound auth (shared secret) ───────────────────────────────────────
+//
+// The MCP HTTP server binds 127.0.0.1 but any local process on the same host
+// could otherwise call `get_token` and exfiltrate OAuth tokens. Require an
+// `X-MCP-Secret` header on every inbound request. The secret is either
+// provided via the `MCP_CONNECT_SECRET` env var (so the bridge/router can
+// share it out-of-band) or generated at startup and written to a 0600 file
+// that only the owning pm2 process (same uid) can read.
+const MCP_SECRET = process.env.MCP_CONNECT_SECRET || crypto.randomBytes(32).toString('hex');
+const MCP_SECRET_BUF = Buffer.from(MCP_SECRET, 'utf8');
+const MCP_SECRET_FILE = join(tmpdir(), `connect-mcp-${process.pid}.secret`);
+
+try {
+  writeFileSync(MCP_SECRET_FILE, MCP_SECRET, { mode: 0o600 });
+} catch (err) {
+  console.error(`[connect] failed to write MCP secret file ${MCP_SECRET_FILE}: ${err.message}`);
+  process.exit(1);
+}
+
+function cleanupSecretFile() {
+  try { unlinkSync(MCP_SECRET_FILE); } catch { /* already gone */ }
+}
+
+function checkMcpAuth(req) {
+  const header = req.headers['x-mcp-secret'];
+  if (!header || typeof header !== 'string') return false;
+  const provided = Buffer.from(header, 'utf8');
+  if (provided.length !== MCP_SECRET_BUF.length) return false;
+  try {
+    return crypto.timingSafeEqual(provided, MCP_SECRET_BUF);
+  } catch {
+    return false;
+  }
+}
 
 // ─── Router HTTP client ─────────────────────────────────────────────────────
 
@@ -245,6 +282,9 @@ const server = http.createServer(async (req, res) => {
 
   // MCP transport — POST / accepts JSON-RPC
   if (req.method === 'POST' && (req.url === '/' || req.url === '/mcp')) {
+    if (!checkMcpAuth(req)) {
+      return sendJson(res, 401, rpcError(null, -32001, 'Unauthorized: missing or invalid X-MCP-Secret header'));
+    }
     try {
       const body = await readBody(req);
       const response = await handleJsonRpc(body);
@@ -260,6 +300,8 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, '127.0.0.1', async () => {
   console.log(`[connect] MCP server listening on http://127.0.0.1:${PORT}`);
+  console.log(`[connect] MCP auth: callers must send header 'X-MCP-Secret: <secret>'`);
+  console.log(`[connect] MCP secret file (0600, pid-scoped): ${MCP_SECRET_FILE}`);
   await registerWithRouter().catch(err => {
     console.error('[connect] MCP registration failed (will retry on next startup):', err.message);
   });
@@ -311,8 +353,11 @@ async function shutdown(signal) {
   } catch (err) {
     console.warn(`[connect] shutdown error: ${err.message}`);
   }
+  cleanupSecretFile();
   process.exit(0);
 }
+
+process.on('exit', cleanupSecretFile);
 
 process.on('SIGINT', () => { shutdown('SIGINT'); });
 process.on('SIGTERM', () => { shutdown('SIGTERM'); });

@@ -19,6 +19,14 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 // ---------------------------------------------------------------------------
 
 const AGENT_NAME = process.env.APP_INSTANCE_NAME || 'default';
+// Defense-in-depth: enforce the same name regex the router/bridge validate against
+// at install time. Rejects anything that could escape template-literal contexts
+// (the system prompt, shell commands in tool-generated curl examples, etc.).
+// Router is the authoritative check; this is a last-line safety net.
+if (!/^[a-z0-9][a-z0-9-]{0,49}$/.test(AGENT_NAME) || AGENT_NAME.includes('--')) {
+  console.error(`[agent] FATAL: APP_INSTANCE_NAME "${AGENT_NAME}" does not match ^[a-z0-9][a-z0-9-]{0,49}$ (no "--")`);
+  process.exit(1);
+}
 let PARAMS = {};
 try { PARAMS = JSON.parse(process.env.APP_PARAMETERS || '{}'); }
 catch (err) { console.error('[agent] Failed to parse APP_PARAMETERS, using defaults:', err.message); }
@@ -42,7 +50,11 @@ const CWD = process.env.AGENT_CWD || process.env.HOME || '/root';
 //   worker_id     — from WORKSPACE_INSTANCE_ID (or INSTANCE_ID), unique per worker
 //   app_identifier— manifest identifier, com.xaiworkspace.agent
 //   instance_name — APP_INSTANCE_NAME (this process)
-const APP_IDENTIFIER = 'com.xaiworkspace.agent';
+const APP_IDENTIFIER = process.env.APP_IDENTIFIER || 'com.xaiworkspace.agent';
+// Slug is the last dotted segment of the identifier (e.g. "com.xshopper.sales-agent" → "sales-agent").
+// Used as the port-file prefix so multiple agent-like apps don't collide on /tmp.
+const APP_SLUG = APP_IDENTIFIER.slice(APP_IDENTIFIER.lastIndexOf('.') + 1) || 'agent';
+const PORT_FILE = `/tmp/${APP_SLUG}-${AGENT_NAME}.port`;
 const DOMAIN = process.env.DOMAIN || 'xaiworkspace.com';
 const WORKER_ID = process.env.WORKSPACE_INSTANCE_ID || process.env.INSTANCE_ID || 'unknown';
 const IS_PUBLIC = PARAMS.public === true;
@@ -309,8 +321,9 @@ server.setTimeout(600_000);
 server.listen(PORT, '127.0.0.1', () => {
   const actualPort = server.address().port;
 
-  // Write port file so bridge knows where to deliver messages
-  fs.writeFileSync(`/tmp/agent-${AGENT_NAME}.port`, String(actualPort));
+  // Write port file so bridge knows where to deliver messages.
+  // Filename uses the manifest slug so multiple agent-like apps can coexist.
+  fs.writeFileSync(PORT_FILE, String(actualPort));
 
   console.log(`[agent:${AGENT_NAME}] ready on http://127.0.0.1:${actualPort}`);
   console.log(`[agent:${AGENT_NAME}] persona=${PARAMS.persona} cwd=${CWD}`);
@@ -327,7 +340,7 @@ server.on('error', err => {
 
 function shutdown(signal) {
   console.log(`[agent:${AGENT_NAME}] ${signal} — shutting down`);
-  try { fs.unlinkSync(`/tmp/agent-${AGENT_NAME}.port`); } catch {}
+  try { fs.unlinkSync(PORT_FILE); } catch {}
   try { server.close(); } catch {}
   process.exit(0);
 }
