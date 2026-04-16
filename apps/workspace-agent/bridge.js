@@ -877,25 +877,57 @@ async function handleInstallApp(msg) {
       APP_BRIDGE_TOKEN: appBridgeToken,
     };
 
-    // Upgrade mode: code already re-downloaded above, restart ALL instances
+    // Upgrade mode: code already re-downloaded above, restart ALL instances.
+    // Each pm2 process (default + named) gets a freshly rotated APP_BRIDGE_TOKEN
+    // so the HMAC identity boundary keeps working after upgrade. Without
+    // --update-env + merged env, named instances would inherit the stale
+    // token from pm2's cached dump and their next /api/agent-message call
+    // would 403.
     if (upgrade) {
+      // Helper: rotate token, merge into env, restart process with --update-env.
+      const restartWithFreshToken = async (processName, upgradeInstName, ecoFile) => {
+        const freshToken = randomBytes(32).toString('hex');
+        _appBridgeTokens.set(_appTokenKey(slug, upgradeInstName), freshToken);
+        const upgradeEnv = {
+          ...routerEnv,
+          DOMAIN: routerEnv.DOMAIN || BRIDGE_DOMAIN,
+          BRIDGE_DOMAIN,
+          WORKSPACE_INSTANCE_ID: INSTANCE_ID,
+          APP_INSTANCE_NAME: upgradeInstName,
+          APP_PARAMETERS: JSON.stringify(parameters || {}),
+          APP_BRIDGE_TOKEN: freshToken,
+        };
+        if (ecoFile && fs.existsSync(ecoFile)) {
+          await execFileAsync('pm2', ['start', ecoFile, '--update-env'], {
+            timeout: 30000,
+            env: { ...process.env, ...upgradeEnv },
+          }).catch(() => {});
+        }
+        await execFileAsync('pm2', ['restart', processName, '--update-env'], {
+          timeout: 30000,
+          env: { ...process.env, ...upgradeEnv },
+        }).catch(() => {});
+      };
+
       const ecoFile = path.join(appDir, 'ecosystem.config.js');
-      if (fs.existsSync(ecoFile)) {
-        await execFileAsync('pm2', ['start', ecoFile, '--update-env'], { timeout: 30000 });
-      }
-      // Restart any named instances (slug--*)
+      // Default instance first
+      await restartWithFreshToken(slug, 'default', ecoFile);
+      // Named instances (slug--*)
       try {
         const jlist = await execFileAsync('pm2', ['jlist'], { timeout: 10000 });
         const pm2List = JSON.parse(jlist.stdout || '[]');
         for (const p of pm2List) {
           if (p.name !== slug && p.name.startsWith(`${slug}--`)) {
-            await execFileAsync('pm2', ['restart', p.name], { timeout: 10000 }).catch(() => {});
+            const namedInst = p.name.slice(slug.length + 2); // strip "slug--"
+            if (!namedInst || !SAFE_SLUG.test(namedInst)) continue;
+            const namedEco = path.join(appDir, `ecosystem.${namedInst}.config.js`);
+            await restartWithFreshToken(p.name, namedInst, fs.existsSync(namedEco) ? namedEco : null);
           }
         }
       } catch {}
       sendProgress(id, slug, 'complete', 100, instName);
       send({ type: 'install_result', id, slug, name: instName, status: 'ok' });
-      console.log(`[workspace-agent] App upgraded: ${slug} (all instances restarted)`);
+      console.log(`[workspace-agent] App upgraded: ${slug} (all instances restarted with rotated tokens)`);
     } else {
       // Normal install — start pm2 process with instance env vars
       const ecoFile = path.join(appDir, 'ecosystem.config.js');
@@ -1315,6 +1347,32 @@ const healthServer = http.createServer(async (req, res) => {
       return;
     }
 
+    // HMAC token check — mirrors /api/agent-message. Same-worker only but
+    // consistency matters: any loopback caller would otherwise impersonate
+    // another pm2 process on the same bridge.
+    try {
+      const fromSlug = from.slug || 'agent';
+      if (!SAFE_SLUG.test(fromSlug) || !SAFE_SLUG.test(from.name)) {
+        httpJson(res, 400, { ok: false, error: 'invalid from components' });
+        return;
+      }
+      const presentedToken = req.headers['x-app-bridge-token'];
+      const expectedToken = _appBridgeTokens.get(_appTokenKey(fromSlug, from.name));
+      if (typeof presentedToken !== 'string' || !expectedToken) {
+        httpJson(res, 403, { ok: false, error: 'missing or unknown bridge token' });
+        return;
+      }
+      const a = Buffer.from(presentedToken, 'utf8');
+      const b = Buffer.from(expectedToken, 'utf8');
+      if (a.length !== b.length || !timingSafeEqual(a, b)) {
+        httpJson(res, 403, { ok: false, error: 'bridge token mismatch' });
+        return;
+      }
+    } catch {
+      httpJson(res, 403, { ok: false, error: 'from validation failed' });
+      return;
+    }
+
     const msg = {
       type: 'app_message',
       from,
@@ -1424,8 +1482,54 @@ const healthServer = http.createServer(async (req, res) => {
   }
 
   // POST /api/agent-response — agent sends result back to user (forwarded to router → frontend)
+  // Body: { from: "domain/worker_id/com.xaiworkspace.agent/name", agentName, result }
+  //
+  // Same HMAC token check as /api/agent-message — any loopback caller otherwise
+  // could POST here and impersonate an arbitrary agentName upstream.
   if (req.method === 'POST' && url === '/api/agent-response') {
     const body = await readHttpBody(req);
+    const from = body?.from; // required — mirrors /api/agent-message shape
+    if (!from) {
+      httpJson(res, 400, { ok: false, error: 'from is required' });
+      return;
+    }
+    const fromParsed = parseAgentAddress(from);
+    if (!fromParsed) {
+      httpJson(res, 400, { ok: false, error: 'invalid from address format' });
+      return;
+    }
+    if (fromParsed.kind === 'private' && fromParsed.workerId && fromParsed.workerId !== INSTANCE_ID) {
+      httpJson(res, 403, { ok: false, error: 'from.workerId does not match this bridge' });
+      return;
+    }
+    try {
+      const slug = slugFromIdentifier(fromParsed.appIdentifier);
+      if (!slug || !SAFE_SLUG.test(slug) || !fromParsed.instanceName || !SAFE_SLUG.test(fromParsed.instanceName)) {
+        httpJson(res, 400, { ok: false, error: 'invalid from address components' });
+        return;
+      }
+      const presentedToken = req.headers['x-app-bridge-token'];
+      const expectedToken = _appBridgeTokens.get(_appTokenKey(slug, fromParsed.instanceName));
+      if (typeof presentedToken !== 'string' || !expectedToken) {
+        httpJson(res, 403, { ok: false, error: 'missing or unknown bridge token' });
+        return;
+      }
+      const a = Buffer.from(presentedToken, 'utf8');
+      const b = Buffer.from(expectedToken, 'utf8');
+      if (a.length !== b.length || !timingSafeEqual(a, b)) {
+        httpJson(res, 403, { ok: false, error: 'bridge token mismatch' });
+        return;
+      }
+      const portFile = `/tmp/${slug}-${fromParsed.instanceName}.port`;
+      if (!fs.existsSync(portFile)) {
+        httpJson(res, 403, { ok: false, error: 'from.instanceName not running on this bridge' });
+        return;
+      }
+    } catch {
+      httpJson(res, 403, { ok: false, error: 'from validation failed' });
+      return;
+    }
+
     send({
       type: 'agent_response',
       agentName: body.agentName,
