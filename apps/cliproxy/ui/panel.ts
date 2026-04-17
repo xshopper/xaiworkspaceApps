@@ -800,8 +800,9 @@ xai.on('ready', () => {
 });
 
 // Sync with chat — refresh when cliproxy commands are used
-xai.on('chat.message', (msg: any) => {
-  if (msg?.text?.includes?.('@cliproxy')) {
+xai.on('chat.message', (msg: unknown) => {
+  const text = typeof msg === 'object' && msg !== null && 'text' in msg ? (msg as { text?: unknown }).text : undefined;
+  if (typeof text === 'string' && text.includes('@cliproxy')) {
     // Delay a bit to let the command execute
     setTimeout(loadData, 3000);
   }

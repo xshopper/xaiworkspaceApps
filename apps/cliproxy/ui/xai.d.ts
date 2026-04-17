@@ -13,19 +13,19 @@ interface XaiHttpOptions {
   body?: string;
 }
 
-interface XaiHttpResponse<T = any> {
+interface XaiHttpResponse<T = unknown> {
   status: number;
   data: T;
 }
 
 interface XaiStorageEntry {
   key: string;
-  value: any;
+  value: unknown;
 }
 
 interface XaiStorage {
-  get(key: string): Promise<any>;
-  set(key: string, value: any): Promise<true>;
+  get(key: string): Promise<unknown>;
+  set(key: string, value: unknown): Promise<true>;
   delete(key: string): Promise<true>;
   list(prefix?: string): Promise<XaiStorageEntry[]>;
 }
@@ -40,10 +40,10 @@ interface XaiChat {
 }
 
 interface XaiMemory {
-  get(category: string, key: string): Promise<any>;
-  set(category: string, key: string, value: any, opts?: { importance?: number; metadata?: any }): Promise<void>;
-  search(query: string): Promise<any[]>;
-  list(category: string): Promise<any[]>;
+  get(category: string, key: string): Promise<unknown>;
+  set(category: string, key: string, value: unknown, opts?: { importance?: number; metadata?: unknown }): Promise<void>;
+  search(query: string): Promise<unknown[]>;
+  list(category: string): Promise<unknown[]>;
   remove(category: string, key: string): Promise<void>;
 }
 
@@ -67,22 +67,22 @@ interface XaiDevice {
 }
 
 interface XaiTools {
-  execute(toolSlug: string, operation: string, params?: { params?: any; body?: any; query?: any }): Promise<any>;
-  list(): Promise<any[]>;
+  execute(toolSlug: string, operation: string, params?: { params?: unknown; body?: unknown; query?: unknown }): Promise<unknown>;
+  list(): Promise<unknown[]>;
 }
 
 interface XaiSDK {
   render(html: string): void;
-  http<T = any>(url: string, options?: XaiHttpOptions): Promise<XaiHttpResponse<T>>;
+  http<T = unknown>(url: string, options?: XaiHttpOptions): Promise<XaiHttpResponse<T>>;
   storage: XaiStorage;
   chat: XaiChat;
   memory: XaiMemory;
   device: XaiDevice;
   tools: XaiTools;
-  on(event: string, handler: (data: any) => void): void;
-  request(action: string, data: any): Promise<any>;
+  on(event: string, handler: (data: unknown) => void): void;
+  request<T = unknown>(action: string, data: unknown): Promise<T>;
   requestApproval(action: string, description: string, details?: string): Promise<boolean>;
-  log(message: string, data?: any): void;
+  log(message: string, data?: unknown): void;
 }
 
 declare const xai: XaiSDK;
