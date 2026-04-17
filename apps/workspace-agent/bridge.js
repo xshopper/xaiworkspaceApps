@@ -56,6 +56,7 @@ const OC_CONFIG_PATH = path.join(HOME, '.openclaw', 'openclaw.json');
 
 const SAFE_SLUG       = /^[a-z0-9][a-z0-9._-]*$/;
 const SAFE_IDENTIFIER = /^[a-zA-Z0-9._-]+$/;
+const SAFE_GH_SUBDIR  = /^[a-zA-Z0-9._/-]+$/;
 const VALID_ENV_KEY   = /^[A-Z_][A-Z0-9_]*$/;
 
 if (!INSTANCE_ID || !INSTANCE_TOKEN) {
@@ -615,11 +616,14 @@ async function handleInstallApp(msg) {
       if (ghMatch) {
         const repoUrl = ghMatch[1] + '.git';
         const ghSubdir = ghMatch[3];
+        if (!SAFE_GH_SUBDIR.test(ghSubdir) || ghSubdir.includes('..')) {
+          throw new Error('Invalid GitHub subdirectory path: ' + ghSubdir);
+        }
         const tmpSparse = '/tmp/sparse-' + slug;
         await execAsync('rm -rf ' + tmpSparse, { timeout: 5000 }).catch(() => {});
         await execAsync('git clone --depth 1 --filter=blob:none --sparse "' + repoUrl + '" ' + tmpSparse, { timeout: 120000 });
         await execAsync('cd ' + tmpSparse + ' && git sparse-checkout set "' + ghSubdir + '"', { timeout: 30000 });
-        await execAsync('cp -a ' + tmpSparse + '/' + ghSubdir + '/. ' + appDir + '/', { timeout: 15000 });
+        await execAsync('cp -a "' + tmpSparse + '/' + ghSubdir + '/." "' + appDir + '/"', { timeout: 15000 });
         await execAsync('rm -rf ' + tmpSparse, { timeout: 5000 }).catch(() => {});
       } else {
         await execAsync(`git clone --depth 1 "${sourceUrl}" "${appDir}" 2>/dev/null || (cd "${appDir}" && git pull)`, { timeout: 120000 });
