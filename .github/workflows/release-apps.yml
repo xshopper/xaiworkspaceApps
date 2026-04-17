@@ -83,8 +83,18 @@ jobs:
           echo "Changed apps: $CHANGED"
 
       - name: Build and release each changed app
+        # Route step-output values (which come from repo contents — directory
+        # names committed by authorized contributors) through `env:` rather
+        # than embedding them directly in the shell block. GitHub literally
+        # substitutes `${{ ... }}` into the script before bash parses it, so
+        # a directory name containing shell metacharacters would execute as
+        # code. Passing via env keeps the value as a parameter.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANGED_APPS: ${{ steps.changes.outputs.apps }}
         run: |
-          for APP in ${{ steps.changes.outputs.apps }}; do
+          set -euo pipefail
+          for APP in $CHANGED_APPS; do
             APP_DIR="apps/$APP"
             [ -f "$APP_DIR/manifest.yml" ] || continue
 
@@ -114,17 +124,30 @@ jobs:
             # Zip the app directory (files at root, not nested under apps/slug/)
             (cd "$APP_DIR" && zip -r "/tmp/${APP}-${VERSION}.zip" . -x "*.git*")
 
+            # Publish SHA-256 alongside the zip. The workspace-agent bridge
+            # enforces `msg.sha256` on every install; the router must hand it
+            # the pre-computed digest rather than re-computing from the zip
+            # at publish time (which opens a TOCTOU window between compute
+            # and hand-off). Publishing the digest as a release asset makes
+            # the signed-at-build value available directly to the router.
+            sha256sum "/tmp/${APP}-${VERSION}.zip" | awk '{print $1}' > "/tmp/${APP}-${VERSION}.zip.sha256"
+            echo "  SHA-256: $(cat /tmp/${APP}-${VERSION}.zip.sha256)"
+
             # Clean up bundled binaries from source tree (don't commit them)
             rm -rf "$APP_DIR/bin/amd64" "$APP_DIR/bin/arm64"
 
             # Create or update release
             if gh release view "$TAG" >/dev/null 2>&1; then
-              echo "Release $TAG exists — updating asset"
-              gh release upload "$TAG" "/tmp/${APP}-${VERSION}.zip#${APP}-${VERSION}.zip" --clobber
+              echo "Release $TAG exists — updating assets"
+              gh release upload "$TAG" \
+                "/tmp/${APP}-${VERSION}.zip#${APP}-${VERSION}.zip" \
+                "/tmp/${APP}-${VERSION}.zip.sha256#${APP}-${VERSION}.zip.sha256" \
+                --clobber
             else
               echo "Creating release $TAG"
               gh release create "$TAG" \
                 "/tmp/${APP}-${VERSION}.zip#${APP}-${VERSION}.zip" \
+                "/tmp/${APP}-${VERSION}.zip.sha256#${APP}-${VERSION}.zip.sha256" \
                 --title "@${APP} v${VERSION}" \
                 --notes "Auto-release from push to main (includes CLIProxyAPI ${CLIPROXY_VERSION:-n/a})" \
                 --latest=false
@@ -132,5 +155,3 @@ jobs:
 
             echo "✅ Released: https://github.com/${{ github.repository }}/releases/download/${TAG}/${APP}-${VERSION}.zip"
           done
-        env:
-          GH_TOKEN: ${{ github.token }}
