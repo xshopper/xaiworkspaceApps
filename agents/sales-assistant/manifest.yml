@@ -62,4 +62,12 @@ triggers:
 model: claude-sonnet-4-6
 modelFallback: [claude-haiku-4-5-20251001]
 sandbox: strict
-approvalRequired: [email.send, proposal.send]
+# Email-triggered agent — treat reading OAuth secrets and outbound HTTP as
+# sensitive even when the sandbox grants them. Without these in
+# approvalRequired, a malicious inbound email could silently exfiltrate
+# tokens (via `oc-secret get`) or call attacker-controlled URLs with them.
+approvalRequired:
+  - email.send
+  - proposal.send
+  - oc-secret.read   # gates `oc-secret get oauth/<provider>` token reads
+  - net.fetch        # gates outbound HTTP (Gmail, Calendar, LinkedIn, etc.)
