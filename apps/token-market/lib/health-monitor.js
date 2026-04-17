@@ -14,6 +14,14 @@ const WINDOW_MS = 5 * 60 * 1000;     // 5 min rolling window
 const DEFAULT_COOLDOWN_S = 300;       // 5 min cooldown when open
 const POLL_INTERVAL_MS = 60_000;      // check health every 60s
 const HALF_OPEN_TEST_AFTER_MS = 60_000; // try one request after 60s open
+// Cap the number of tracked listings. Unbounded Map growth was a real leak:
+// `_getBreaker(listingId)` creates an entry per unique listing and never
+// evicts. Router subscriptions can easily reach tens of thousands; over
+// days, this grows without bound. 10k is a generous cap: at ~200 bytes per
+// entry, cap memory sits under 2 MB. LRU eviction is exact (Map preserves
+// insertion order; the Map-reinsert-on-access trick matches pricing-engine
+// lib/pricing-engine.js MAX_CACHE pattern).
+const MAX_BREAKERS = 10_000;
 
 export class HealthMonitor {
   /** @param {string} routerUrl  @param {string} apiKey */
@@ -22,8 +30,10 @@ export class HealthMonitor {
     this.apiKey = apiKey;
     this.pollTimer = null;
 
-    // Local in-memory state (authoritative state is in router PG)
-    // Map<listingId, { failures: { ts, reason }[], state, disabledUntil, successCount }>
+    // Local in-memory state (authoritative state is in router PG).
+    // Map<listingId, { failures: { ts, reason }[], state, disabledUntil,
+    // successCount }>. Map iteration order is insertion order; LRU-by-access
+    // is implemented by delete+re-set on every _getBreaker read.
     this.breakers = new Map();
   }
 
@@ -105,18 +115,33 @@ export class HealthMonitor {
   // ── Internal ───────────────────────────────────────────────────────────
 
   _getBreaker(listingId) {
-    if (!this.breakers.has(listingId)) {
-      this.breakers.set(listingId, {
-        state: 'closed',
-        failures: [],
-        disabledUntil: null,
-        lastFailureReason: null,
-        cooldownSeconds: DEFAULT_COOLDOWN_S,
-        successCount: 0,
-        lastSuccessAt: null,
-      });
+    const existing = this.breakers.get(listingId);
+    if (existing) {
+      // LRU bump: delete+re-insert so `listingId` moves to the end of the
+      // Map's insertion order. Eviction below drops from the front.
+      this.breakers.delete(listingId);
+      this.breakers.set(listingId, existing);
+      return existing;
     }
-    return this.breakers.get(listingId);
+    // Evict the oldest entries before inserting to keep the Map bounded. We
+    // loop because a prior run may have grown the Map above the cap; one
+    // shift is cheap so the while is a no-op on the steady-state path.
+    while (this.breakers.size >= MAX_BREAKERS) {
+      const oldestKey = this.breakers.keys().next().value;
+      if (oldestKey === undefined) break;
+      this.breakers.delete(oldestKey);
+    }
+    const fresh = {
+      state: 'closed',
+      failures: [],
+      disabledUntil: null,
+      lastFailureReason: null,
+      cooldownSeconds: DEFAULT_COOLDOWN_S,
+      successCount: 0,
+      lastSuccessAt: null,
+    };
+    this.breakers.set(listingId, fresh);
+    return fresh;
   }
 
   /** Sync breaker state to router for persistence. */

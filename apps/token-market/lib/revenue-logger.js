@@ -24,9 +24,15 @@ export class RevenueLogger {
     this.buffer = [];
     this.flushTimer = null;
 
-    // Start flush timer
-    this.flushTimer = setInterval(() => this._flush(), FLUSH_INTERVAL_MS);
-    if (this.flushTimer.unref) this.flushTimer.unref();
+    // Only start the 1s flush timer when revenue logging is actually
+    // enabled. While the feature is disabled (current state until M1 lands),
+    // the timer would wake the event loop every second just to hit the
+    // early-return in _flush() — wasteful and visible on idle profiling.
+    // dispose() stays safe when flushTimer is null.
+    if (REVENUE_LOGGING_ENABLED) {
+      this.flushTimer = setInterval(() => this._flush(), FLUSH_INTERVAL_MS);
+      if (this.flushTimer.unref) this.flushTimer.unref();
+    }
 
     // Flush remaining records on process shutdown
     const onExit = () => this.dispose();

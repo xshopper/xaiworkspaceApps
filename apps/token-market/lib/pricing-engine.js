@@ -10,6 +10,8 @@
  * Constraints: 100ms CPU, 8MB memory, no I/O, no async.
  */
 
+import { createHash } from 'node:crypto';
+
 // ── isolated-vm lazy loader (single-flight) ─────────────────────────────
 //
 // We intentionally avoid top-level `await import('isolated-vm')`:
@@ -64,12 +66,14 @@ const isolateCache = new Map();
 const MAX_CACHE = 100;
 
 function cacheKey(code) {
-  // Simple hash — good enough for cache keying
-  let h = 0;
-  for (let i = 0; i < code.length; i++) {
-    h = ((h << 5) - h + code.charCodeAt(i)) | 0;
-  }
-  return h.toString(36);
+  // Use SHA-256 rather than djb2. djb2's 32-bit space (~4B) gives a
+  // birthday-collision around 2^16 ≈ 65k entries — well inside the realm
+  // of "users deploying many strategies on a shared instance". A collision
+  // here means code A's compiled isolate is served as the compilation for
+  // code B, which is a cross-user code-execution context share. SHA-256 is
+  // cheap (pricing code is capped at 10k chars) and makes the collision
+  // probability negligible.
+  return createHash('sha256').update(code).digest('hex');
 }
 
 export class PricingEngine {
