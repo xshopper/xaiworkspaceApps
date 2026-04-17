@@ -192,6 +192,16 @@ function connectRouter() {
         if (ws.readyState === WebSocket.OPEN) ws.ping();
       }, 45000);
 
+      // Repopulate per-app HMAC tokens from pm2 env. `_appBridgeTokens` is a
+      // pure in-memory Map populated during handleInstallApp + upgrade. On a
+      // bridge restart the Map resets to empty, while the app pm2 processes
+      // keep running with their original APP_BRIDGE_TOKEN baked into env. Any
+      // `deliverToLocalApp` call before the next install_app would then drop
+      // the message (no token → warn + return false). Rehydrate from pm2's
+      // view of the world so inter-agent + user→agent delivery works
+      // immediately after restart.
+      reconcileAppBridgeTokens();
+
       // Report installed apps
       reportInstalledApps();
 
@@ -590,6 +600,40 @@ function readManifestVersion(slug) {
     }
   } catch {}
   return null;
+}
+
+// Rehydrate _appBridgeTokens from pm2's view after a bridge restart. The
+// authoritative source is pm2_env.env.APP_BRIDGE_TOKEN for every running app
+// pm2 process (matched by non-system name). Missing env keys are skipped with
+// a warning — that app will 401 inbound deliveries until it is re-installed
+// or upgraded, which is the correct fail-closed behavior.
+function reconcileAppBridgeTokens() {
+  try {
+    const list = execFileSync('pm2', ['jlist', '--no-color'], { encoding: 'utf-8', timeout: 5000 });
+    const procs = JSON.parse(list);
+    const systemProcs = new Set(['workspace-agent', 'bootstrap-bridge', 'bridge', 'updater']);
+    let hydrated = 0;
+    let skipped = 0;
+    for (const p of procs) {
+      if (systemProcs.has(p.name)) continue;
+      // pm2 names named instances as "slug--name"; default as "slug".
+      const slug = p.name.includes('--') ? p.name.split('--')[0] : p.name;
+      const instName = p.name.includes('--') ? p.name.split('--')[1] : 'default';
+      const token = p.pm2_env?.env?.APP_BRIDGE_TOKEN;
+      if (!token || typeof token !== 'string') {
+        console.warn(`[workspace-agent] reconcile: no APP_BRIDGE_TOKEN for ${p.name} (likely pre-HMAC install — re-install to rotate)`);
+        skipped++;
+        continue;
+      }
+      _appBridgeTokens.set(_appTokenKey(slug, instName), token);
+      hydrated++;
+    }
+    if (hydrated + skipped > 0) {
+      console.log(`[workspace-agent] reconcile: rehydrated ${hydrated} app token(s), skipped ${skipped}`);
+    }
+  } catch (e) {
+    console.warn('[workspace-agent] reconcile: failed to hydrate app tokens:', e.message);
+  }
 }
 
 function reportInstalledApps() {
