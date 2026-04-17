@@ -76,6 +76,14 @@ describe('pricing-engine — loadIvm() single-flight race', () => {
   });
 
   test('failure state (null) is sticky — no retry storms', async () => {
+    // IMPORTANT label-clarification: `loadIvm` is designed to *never
+    // reject*. When isolated-vm fails to import it catches the error
+    // internally and resolves the cached promise with `null`. That
+    // resolved-null state is then reused for every subsequent caller
+    // (sticky). This test asserts the "no retry storms" side of that
+    // contract — we do NOT assert rejection propagation because the
+    // single-flight pattern intentionally converts import failures
+    // into a cached null resolution, not a rejection.
     const { load, stats } = makeLoader({ delayMs: 5, fail: true });
     const first = await load();
     expect(first).toBeNull();

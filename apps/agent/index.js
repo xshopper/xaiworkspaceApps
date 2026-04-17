@@ -12,7 +12,30 @@
 
 import http from 'node:http';
 import fs from 'node:fs';
-import { query } from '@anthropic-ai/claude-agent-sdk';
+
+// ---------------------------------------------------------------------------
+// API key — prefer APP_API_KEY (new name), fall back to ANTHROPIC_API_KEY.
+//
+// Mirror the `apps/connect/index.js` + `apps/cliproxy/scripts/setkey.sh`
+// pattern: the bridge issues a LiteLLM virtual key under `APP_API_KEY`;
+// `ANTHROPIC_API_KEY` is the legacy name the Claude Agent SDK reads.
+// Copy APP_API_KEY -> ANTHROPIC_API_KEY before we load the SDK so any
+// module-load-time client construction picks it up. We use a dynamic
+// `await import()` here (rather than a static `import`) specifically so
+// the env mutation above runs first; with a static import the SDK's
+// module body evaluates before this code regardless of source order.
+const APP_API_KEY = process.env.APP_API_KEY || process.env.ANTHROPIC_API_KEY || '';
+if (APP_API_KEY && !process.env.ANTHROPIC_API_KEY) {
+  process.env.ANTHROPIC_API_KEY = APP_API_KEY;
+}
+if (!APP_API_KEY) {
+  console.warn('[agent] WARNING: Neither APP_API_KEY nor ANTHROPIC_API_KEY is set — Claude Agent SDK calls will fail. The bridge should inject APP_API_KEY as the mini-app LiteLLM virtual key (legacy name: ANTHROPIC_API_KEY).');
+}
+if (APP_API_KEY.startsWith('sk-ant-')) {
+  console.warn('[agent] WARNING: APP_API_KEY looks like a real Anthropic API key (sk-ant- prefix). This should be a LiteLLM virtual key issued by the bridge, not a production Anthropic key. Check bridge/pm2 env.');
+}
+
+const { query } = await import('@anthropic-ai/claude-agent-sdk');
 
 // ---------------------------------------------------------------------------
 // Configuration

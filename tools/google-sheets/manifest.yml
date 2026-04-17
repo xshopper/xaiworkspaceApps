@@ -10,6 +10,15 @@ authProvider: google
 baseUrl: https://sheets.googleapis.com/v4
 
 operations:
+  # NOTE: `list` intentionally overrides `baseUrl` by using an absolute
+  # URL — the Sheets v4 API does not expose a "list my spreadsheets"
+  # endpoint, so we query Drive v3 filtered by the spreadsheet MIME type.
+  # The platform tool-SDK resolver (xaiworkspace-backend/src/tool-sdk.js)
+  # supports absolute HTTPS `path` values by using them verbatim instead
+  # of prepending `baseUrl`. Same OAuth scope (`drive.readonly`) covers
+  # both endpoints. Do NOT split into a separate `google-drive` manifest
+  # without first migrating installed tools — identifier changes break
+  # existing user connections.
   - name: list
     description: List your spreadsheets
     method: GET
