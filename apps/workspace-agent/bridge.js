@@ -769,19 +769,24 @@ function handleRestartApp(msg) {
 
 // ── list_apps ───────────────────────────────────────────────────────────────
 
+/**
+ * Returns the names of all installed app directories (those containing a manifest.yml).
+ * Returns an empty array when APPS_DIR does not exist or is unreadable.
+ */
+function listInstalledApps() {
+  if (!fs.existsSync(APPS_DIR)) return [];
+  try {
+    return fs.readdirSync(APPS_DIR).filter(entry =>
+      fs.existsSync(path.join(APPS_DIR, entry, 'manifest.yml'))
+    );
+  } catch {
+    return [];
+  }
+}
+
 function handleListApps(msg) {
   const { id } = msg;
-  const apps = [];
-  try {
-    if (fs.existsSync(APPS_DIR)) {
-      for (const entry of fs.readdirSync(APPS_DIR)) {
-        const manifestPath = path.join(APPS_DIR, entry, 'manifest.yml');
-        if (fs.existsSync(manifestPath)) {
-          apps.push({ identifier: entry, installed: true });
-        }
-      }
-    }
-  } catch {}
+  const apps = listInstalledApps().map(entry => ({ identifier: entry, installed: true }));
   send({ type: 'list_apps_result', id, apps });
 }
 
@@ -899,17 +904,7 @@ function handleExec(msg) {
 // ── scan ────────────────────────────────────────────────────────────────────
 
 function handleScan() {
-  const apps = [];
-  try {
-    if (fs.existsSync(APPS_DIR)) {
-      for (const entry of fs.readdirSync(APPS_DIR)) {
-        const manifestPath = path.join(APPS_DIR, entry, 'manifest.yml');
-        if (fs.existsSync(manifestPath)) {
-          apps.push({ name: entry, status: 'running', health: 'unknown' });
-        }
-      }
-    }
-  } catch {}
+  const apps = listInstalledApps().map(entry => ({ name: entry, status: 'running', health: 'unknown' }));
   send({ type: 'scan_result', instances: apps });
 }
 
