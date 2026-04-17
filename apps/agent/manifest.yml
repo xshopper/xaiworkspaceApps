@@ -48,3 +48,31 @@ permissions:
   chat: [chat.send, chat.read, chat.listen]
 
 sandbox: relaxed
+
+# Permission model notes
+# ----------------------
+# The agent runs Claude Code with `permissionMode: 'default'` (NEVER
+# `bypassPermissions`). In SDK `default` mode the SDK itself enforces an
+# allowlist: any tool NOT in `options.allowedTools` triggers the
+# host's `canUseTool` callback before execution. Because this mini-app
+# does not currently supply a `canUseTool` hook, the SDK's built-in
+# interactive approval UI is invoked — which in a non-interactive
+# pm2 / headless deployment causes the tool call to be declined.
+#
+# That is the correct default for an autonomous agent: inter-agent
+# messages can't silently mutate the filesystem or shell out. If an
+# installed agent needs autonomous shell/file/network access, we intend
+# to plumb an explicit `canUseTool` callback that consults the workspace
+# platform's `approvalRequired` machinery (below) rather than loosening
+# the SDK mode.
+#
+# The `approvalRequired` field below is the *platform-level* gate — it
+# applies to high-level agent actions (e.g. `email.send`), not to
+# low-level Claude Code tools. The SDK's tool gate is a separate layer.
+approvalRequired:
+  # Destructive / externally-visible actions — always prompt the user.
+  - shell.exec
+  - fs.write
+  - fs.delete
+  - net.fetch
+  - agent.send  # inter-agent messages originating from this agent

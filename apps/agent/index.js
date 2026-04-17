@@ -101,6 +101,12 @@ function getSystemPrompt() {
   const persona = PARAMS.persona || 'developer';
   const base = PERSONA_PROMPTS[persona] || PERSONA_PROMPTS.developer;
 
+  // IMPORTANT: do NOT interpolate the literal BRIDGE_TOKEN value into the
+  // system prompt. Doing so embeds a high-value secret into Claude's
+  // session history (which may be persisted to disk, logged, or echoed
+  // back to the user in error traces). Instead, reference the env var by
+  // name and have the LLM curl with the shell's own expansion
+  // ($APP_BRIDGE_TOKEN) — the token stays in memory + env only.
   return `${base}
 
 ## Your Address
@@ -113,11 +119,14 @@ The address format is: domain/worker_id/app_identifier/instance_name
 ## Inter-Agent Messaging
 
 To send a message to another agent, post the full target address to the
-bridge's agent-message endpoint:
+bridge's agent-message endpoint. Use the \`$APP_BRIDGE_TOKEN\` environment
+variable (already set in your shell) for the auth header — never hardcode
+the token value into commands or chat, that leaks it into logs and
+conversation history:
 
 curl -s -X POST ${BRIDGE_URL}/api/agent-message \\
   -H 'Content-Type: application/json' \\
-  -H 'X-App-Bridge-Token: ${BRIDGE_TOKEN}' \\
+  -H "X-App-Bridge-Token: $APP_BRIDGE_TOKEN" \\
   -d '{"from":"${OWN_ADDRESS}","to":"DOMAIN/WORKER_ID/com.xaiworkspace.agent/TARGET_NAME","message":"YOUR_MESSAGE"}'
 
 Your address is ${OWN_ADDRESS} — always pass it as the 'from' field.
@@ -335,13 +344,13 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && req.url === '/message') {
     try {
       const body = await readBody(req);
-      // Fast-path for the overflow case: respond 429 before we kick off
-      // processing so the caller sees the rejection in the HTTP layer.
+      // Fast-path for the overflow case: respond 429 synchronously and
+      // DO NOT also kick off processMessage(). Previously we did both,
+      // which resulted in a double-signal: the HTTP caller got 429 *and*
+      // processMessage re-invoked sendToBridge with a queue_full error
+      // bubble, duplicating the failure notification in chat.
       if (busy && messageQueue.length >= MAX_QUEUE) {
         json(res, 429, { ok: false, error: 'queue_full', depth: messageQueue.length, max: MAX_QUEUE });
-        // Still run processMessage so user_input callers get an error
-        // bubble delivered via the bridge response channel.
-        processMessage(body);
         return;
       }
       json(res, 200, { ok: true, queued: busy });
@@ -356,6 +365,15 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && req.url === '/reset') {
     sessionId = null;
     messageQueue.length = 0;
+    // Clearing `busy` is essential: if /reset arrives while a Claude Code
+    // session is in flight, the old `busy = true` will survive the reset,
+    // the in-flight `finally` drain will see an empty queue and no-op, and
+    // every subsequent message will be queued forever. Forcing `busy=false`
+    // unblocks the queue immediately. The in-flight `runClaude()` may still
+    // complete asynchronously and write to `sessionId`, but `/reset` is an
+    // explicit "start over" signal so we accept that — the next processed
+    // message will resume the new (or absent) session.
+    busy = false;
     json(res, 200, { ok: true, message: 'Session reset' });
     return;
   }
