@@ -8,6 +8,14 @@ version: 0.1.0
 
 startup: "node index.js"
 
+# No top-level `model:` field is set here intentionally. Unlike most apps,
+# the @agent mini-app is multi-instance and lets each installed agent
+# pick its own model via the install-time `model` parameter below. The
+# entry point (`index.js`) reads `PARAMS.model` and passes it directly to
+# the Claude Agent SDK via `options.model`. If omitted, the SDK falls back
+# to its default. Setting a top-level `model` here would not do anything
+# useful — the install parameter takes precedence.
+
 parameters:
   - name: persona
     label: Agent Persona

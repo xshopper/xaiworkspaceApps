@@ -136,11 +136,33 @@ let sessionId = null;
 let busy = false;
 const messageQueue = [];
 
+// Persona-specific permission policy.
+// Previously every persona ran with `bypassPermissions` + `allowDangerouslySkipPermissions`
+// which meant any inter-agent message could trigger unsandboxed shell execution.
+// This is especially dangerous for the `tester` and `reviewer` personas (which
+// should never write or execute production code) but also inappropriate for
+// `pm` (coordinates, doesn't execute) and `developer` (should prompt for
+// destructive/system changes).
+//
+// Policy: always run in the default (approval-required) mode. The manifest
+// `approvalRequired` field on the installed app defines which tools require
+// explicit user approval; the SDK defers to that when we don't override.
+const PERSONA_PERMISSION_MODE = {
+  pm: 'default',
+  developer: 'default',
+  tester: 'default',
+  reviewer: 'default',
+};
+
 async function runClaude(prompt) {
+  const persona = PARAMS.persona || 'developer';
+  const permissionMode = PERSONA_PERMISSION_MODE[persona] || 'default';
   const options = {
     cwd: CWD,
-    permissionMode: 'bypassPermissions',
-    allowDangerouslySkipPermissions: true,
+    // Never use 'bypassPermissions' — that makes inter-agent messages a
+    // remote shell. Stay on the SDK default so manifest `approvalRequired`
+    // entries gate sensitive tools.
+    permissionMode,
     maxTurns: 50,
     model: PARAMS.model || undefined,
   };
@@ -172,15 +194,27 @@ async function runClaude(prompt) {
 // Message processing — sequential to avoid concurrent Claude Code sessions
 // ---------------------------------------------------------------------------
 
+const MAX_QUEUE = 100;
+
 async function processMessage(msg) {
   if (busy) {
-    if (messageQueue.length >= 100) {
-      console.warn(`[agent:${AGENT_NAME}] Queue full (100), dropping message`);
-      return;
+    if (messageQueue.length >= MAX_QUEUE) {
+      console.warn(`[agent:${AGENT_NAME}] Queue full (${MAX_QUEUE}), rejecting message`);
+      // Surface the drop back to the caller so they know the work was
+      // rejected rather than silently accepted.
+      if (msg.type === 'user_input') {
+        await sendToBridge({
+          type: 'agent_response',
+          agentName: AGENT_NAME,
+          result: `Error: agent queue full (${MAX_QUEUE} pending) — please retry shortly`,
+          error: 'queue_full',
+        });
+      }
+      return { ok: false, error: 'queue_full' };
     }
     messageQueue.push(msg);
     console.log(`[agent:${AGENT_NAME}] Queued message (${messageQueue.length} pending)`);
-    return;
+    return { ok: true, queued: true, depth: messageQueue.length };
   }
 
   busy = true;
@@ -301,6 +335,15 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && req.url === '/message') {
     try {
       const body = await readBody(req);
+      // Fast-path for the overflow case: respond 429 before we kick off
+      // processing so the caller sees the rejection in the HTTP layer.
+      if (busy && messageQueue.length >= MAX_QUEUE) {
+        json(res, 429, { ok: false, error: 'queue_full', depth: messageQueue.length, max: MAX_QUEUE });
+        // Still run processMessage so user_input callers get an error
+        // bubble delivered via the bridge response channel.
+        processMessage(body);
+        return;
+      }
       json(res, 200, { ok: true, queued: busy });
       processMessage(body);
     } catch (err) {
