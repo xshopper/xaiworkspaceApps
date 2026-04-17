@@ -95,6 +95,13 @@ export class HealthMonitor {
     if (this.pollTimer.unref) this.pollTimer.unref();
   }
 
+  /** Stop the polling timer. Idempotent. Called from graceful shutdown. */
+  stopPolling() {
+    if (!this.pollTimer) return;
+    clearInterval(this.pollTimer);
+    this.pollTimer = null;
+  }
+
   // ── Internal ───────────────────────────────────────────────────────────
 
   _getBreaker(listingId) {

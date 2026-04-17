@@ -10,6 +10,7 @@
 
 import http from 'node:http';
 import { URL } from 'node:url';
+import crypto from 'node:crypto';
 import { PricingEngine } from './lib/pricing-engine.js';
 import { HealthMonitor } from './lib/health-monitor.js';
 import { RevenueLogger, REVENUE_LOGGING_ENABLED, REVENUE_LOGGING_DISABLED_REASON } from './lib/revenue-logger.js';
@@ -21,7 +22,18 @@ const LITELLM_URL = process.env.LITELLM_URL ?? 'http://localhost:4000';
 const CLIPROXY_URL = 'http://localhost:4001';
 const PLATFORM_KEY = process.env.ANTHROPIC_API_KEY ?? 'local-only';
 const BRIDGE_TOKEN = process.env.APP_BRIDGE_TOKEN ?? '';
-const WEBHOOK_SECRET = process.env.LITELLM_WEBHOOK_SECRET || BRIDGE_TOKEN;
+// Webhook secret for LiteLLM → /hooks/completion. Must be a dedicated secret
+// provisioned separately from APP_BRIDGE_TOKEN (which is the per-app
+// router↔bridge credential). Sharing the two would mean anyone with
+// BRIDGE_TOKEN (or any LiteLLM admin) could authenticate either surface
+// against the other. We refuse to fall back; if LITELLM_WEBHOOK_SECRET is
+// unset the webhook endpoint rejects all requests until the operator sets
+// it explicitly.
+const WEBHOOK_SECRET = process.env.LITELLM_WEBHOOK_SECRET ?? '';
+if (!WEBHOOK_SECRET) {
+  console.warn('[token-market] WARNING: LITELLM_WEBHOOK_SECRET is not set — /hooks/completion will reject ALL requests (401). Set LITELLM_WEBHOOK_SECRET to the shared secret configured on the LiteLLM callback.');
+}
+const WEBHOOK_SECRET_BUF = WEBHOOK_SECRET ? Buffer.from(WEBHOOK_SECRET, 'utf8') : null;
 
 // ── Subsystems ───────────────────────────────────────────────────────────
 
@@ -371,9 +383,18 @@ routes.set('POST /sync', async (req, res) => {
 
 /** POST /hooks/completion — LiteLLM completion callback for billing + health tracking */
 routes.set('POST /hooks/completion', async (req, res) => {
-  // Authenticate webhook: check x-webhook-secret header or Authorization bearer
-  const secret = req.headers['x-webhook-secret'] ?? authToken(req);
-  if (!WEBHOOK_SECRET || secret !== WEBHOOK_SECRET) {
+  // Authenticate webhook: check x-webhook-secret header or Authorization bearer.
+  // Timing-safe comparison: a naive `secret !== WEBHOOK_SECRET` leaks the
+  // secret one byte at a time under a remote attacker. We compare against
+  // a pre-computed Buffer of the configured secret with
+  // `crypto.timingSafeEqual`, length-gated so the comparison itself can't
+  // throw on mismatched lengths.
+  if (!WEBHOOK_SECRET_BUF) {
+    return json(res, 401, { error: 'Unauthorized: webhook secret not configured on this server' });
+  }
+  const secretHeader = req.headers['x-webhook-secret'] ?? authToken(req) ?? '';
+  const secretBuf = Buffer.from(String(secretHeader), 'utf8');
+  if (secretBuf.length !== WEBHOOK_SECRET_BUF.length || !crypto.timingSafeEqual(secretBuf, WEBHOOK_SECRET_BUF)) {
     return json(res, 401, { error: 'Unauthorized: invalid or missing webhook secret' });
   }
 
@@ -548,3 +569,33 @@ server.listen(PORT, () => {
   // Start health monitor polling
   healthMonitor.startPolling();
 });
+
+// ── Graceful shutdown ───────────────────────────────────────────────────
+//
+// On SIGTERM / SIGINT: stop the HealthMonitor's polling timer, let the
+// RevenueLogger do a final flush of buffered records (via dispose()),
+// then close the HTTP server. Without this, pm2's SIGKILL after the
+// 5s shutdown window would kill us mid-flush and drop revenue rows.
+let _shuttingDown = false;
+async function shutdown(signal) {
+  if (_shuttingDown) return;
+  _shuttingDown = true;
+  console.log(`[token-market] ${signal} — shutting down`);
+  try { healthMonitor.stopPolling(); } catch (err) { console.warn('[token-market] stopPolling error:', err.message); }
+  try {
+    // dispose() kicks a final _flush() asynchronously; await a short grace
+    // window so the in-flight POST to the router has a chance to complete.
+    revenueLogger.dispose();
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  } catch (err) {
+    console.warn('[token-market] revenueLogger.dispose error:', err.message);
+  }
+  try {
+    if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+  } catch { /* ignore */ }
+  server.close(() => process.exit(0));
+  // Hard-exit backstop in case close() hangs on a slow keep-alive.
+  setTimeout(() => process.exit(0), 4000).unref();
+}
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));

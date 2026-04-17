@@ -10,7 +10,7 @@
  * Constraints: 100ms CPU, 8MB memory, no I/O, no async.
  */
 
-// ── isolated-vm lazy loader ──────────────────────────────────────────────
+// ── isolated-vm lazy loader (single-flight) ─────────────────────────────
 //
 // We intentionally avoid top-level `await import('isolated-vm')`:
 //   - top-level await fails fast in environments that don't support it
@@ -23,24 +23,37 @@
 //       _ivmCache === <module>  → loaded successfully
 // The `=== null` guard in execute() is the explicit "unavailable" path;
 // `=== undefined` triggers the factory on first use.
-let _ivmCache; // undefined | null | module
+//
+// Single-flight: concurrent callers on the cold path previously each kicked
+// off their own `await import('isolated-vm')`, which could race on the
+// native addon load (double-dispose, undefined-exports flapping). We now
+// memoize the *promise* of the first load and return it to every concurrent
+// caller; only after that promise settles do we cache the resolved value.
+let _ivmCache;    // undefined | null | module
+let _ivmPromise;  // undefined | Promise<null | module>
 
 async function loadIvm() {
   if (_ivmCache !== undefined) return _ivmCache;
-  try {
-    const mod = await import('isolated-vm');
-    // Handle default export for ESM
-    _ivmCache = mod.default ?? mod;
-    if (!_ivmCache || typeof _ivmCache.Isolate !== 'function') {
-      console.error('[FATAL] isolated-vm loaded but exports are unexpected — refusing all code execution for safety');
+  if (_ivmPromise) return _ivmPromise;
+  _ivmPromise = (async () => {
+    try {
+      const mod = await import('isolated-vm');
+      // Handle default export for ESM
+      const resolved = mod.default ?? mod;
+      if (!resolved || typeof resolved.Isolate !== 'function') {
+        console.error('[FATAL] isolated-vm loaded but exports are unexpected — refusing all code execution for safety');
+        _ivmCache = null;
+      } else {
+        _ivmCache = resolved;
+      }
+    } catch (err) {
+      console.error('[FATAL] isolated-vm not available — pricing engine will refuse all code execution for safety:', err?.message || err);
+      console.warn('[WARN] isolated-vm is the sole security boundary for user-defined pricing code. Without it, ALL code execution is blocked. Install isolated-vm to enable the pricing engine.');
       _ivmCache = null;
     }
-  } catch (err) {
-    console.error('[FATAL] isolated-vm not available — pricing engine will refuse all code execution for safety:', err?.message || err);
-    console.warn('[WARN] isolated-vm is the sole security boundary for user-defined pricing code. Without it, ALL code execution is blocked. Install isolated-vm to enable the pricing engine.');
-    _ivmCache = null;
-  }
-  return _ivmCache;
+    return _ivmCache;
+  })();
+  return _ivmPromise;
 }
 
 const MAX_EXECUTION_MS = 100;
