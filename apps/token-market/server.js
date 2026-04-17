@@ -451,7 +451,11 @@ routes.set('POST /hooks/completion', async (req, res) => {
 
 // ── Router ───────────────────────────────────────────────────────────────
 
-/** Match a route pattern like "GET /listings/:id" against a request. */
+/** Match a route pattern like "GET /listings/:id" against a request.
+ *  Returns `{ handler, params }`, `null` (no match), or `{ error: 'bad_path' }`
+ *  when a path segment contains a malformed percent-escape. The caller maps
+ *  the error sentinel to a 400 so we don't crash the server with an
+ *  unhandled URIError. */
 function matchRoute(method, pathname) {
   // Try exact match first
   const exact = `${method} ${pathname}`;
@@ -471,7 +475,15 @@ function matchRoute(method, pathname) {
     let match = true;
     for (let i = 0; i < patternParts.length; i++) {
       if (patternParts[i].startsWith(':')) {
-        params[patternParts[i].slice(1)] = decodeURIComponent(pathParts[i]);
+        // `decodeURIComponent` throws URIError on malformed percent-escapes
+        // (bare `%`, `%GG`, truncated `%A`). That bubbled up as an
+        // unhandled rejection and crashed the server. Surface it as a
+        // routing-level "bad path" signal so the HTTP layer returns 400.
+        try {
+          params[patternParts[i].slice(1)] = decodeURIComponent(pathParts[i]);
+        } catch {
+          return { error: 'bad_path' };
+        }
       } else if (patternParts[i] !== pathParts[i]) {
         match = false;
         break;
@@ -526,6 +538,9 @@ const server = http.createServer(async (req, res) => {
 
   if (!route) {
     return json(res, 404, { error: 'Not found', path: pathname });
+  }
+  if (route.error === 'bad_path') {
+    return json(res, 400, { error: 'Malformed path: invalid percent-encoding' });
   }
 
   try {
