@@ -1,3 +1,25 @@
+/**
+ * project-manager database layer (SQLite via better-sqlite3).
+ *
+ * TENANT ISOLATION INVARIANT
+ * --------------------------
+ * This module is single-tenant by design. There is NO `tenant_id`, `user_id`,
+ * or `instance_id` column on any table; every row in this database belongs
+ * to the workspace instance that owns the database file.
+ *
+ * Isolation is enforced at the filesystem layer by the bridge:
+ *   - The bridge assigns each installed app instance a unique `APP_DATA_DIR`
+ *     under `~/apps/<identifier>/<instance_name>/data/`.
+ *   - Each workspace container runs as its own Docker/ECS task, so two
+ *     workspaces cannot share a filesystem.
+ *   - The bridge sets `APP_DATA_DIR` per pm2 process and never crosses it.
+ *
+ * If project-manager is ever installed in a multi-tenant mode (shared
+ * filesystem, single sqlite file), schema must gain `tenant_id` columns on
+ * every table + WHERE-clause filtering on every query. Until that happens,
+ * any caller that can reach this process can read/write everything here —
+ * HTTP-layer `authenticate()` in server.js is the only access boundary.
+ */
 import Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';

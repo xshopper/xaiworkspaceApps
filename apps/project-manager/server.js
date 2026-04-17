@@ -146,6 +146,7 @@ async function handler(req, res) {
     // ── Projects ──────────────────────────────────────────────────────
 
     if (method === 'GET' && pathname === '/api/projects') {
+      if (!authenticate(req, res)) return;
       return json(res, 200, { projects: db.listProjects() });
     }
 
@@ -174,6 +175,7 @@ async function handler(req, res) {
 
     p = match(method, pathname, { method: 'GET', path: '/api/projects/:pid/tasks' });
     if (p) {
+      if (!authenticate(req, res)) return;
       if (!db.getProject(p.pid)) return json(res, 404, { error: 'Project not found' });
       const filters = {};
       for (const [k, v] of url.searchParams) {
@@ -220,6 +222,7 @@ async function handler(req, res) {
 
     p = match(method, pathname, { method: 'GET', path: '/api/projects/:pid/sprints' });
     if (p) {
+      if (!authenticate(req, res)) return;
       return json(res, 200, { sprints: db.listSprints(p.pid) });
     }
 
@@ -269,6 +272,7 @@ async function handler(req, res) {
     // ── Team ──────────────────────────────────────────────────────────
 
     if (method === 'GET' && pathname === '/api/team') {
+      if (!authenticate(req, res)) return;
       return json(res, 200, { team: db.listTeam() });
     }
 
@@ -297,28 +301,33 @@ async function handler(req, res) {
 
     p = match(method, pathname, { method: 'GET', path: '/api/board/:project_id' });
     if (p) {
+      if (!authenticate(req, res)) return;
       return json(res, 200, db.boardView(p.project_id));
     }
 
     p = match(method, pathname, { method: 'GET', path: '/api/capacity/:sprint_id' });
     if (p) {
+      if (!authenticate(req, res)) return;
       const data = db.capacityView(p.sprint_id);
       return data ? json(res, 200, data) : json(res, 404, { error: 'Sprint not found' });
     }
 
     p = match(method, pathname, { method: 'GET', path: '/api/standup/:project_id' });
     if (p) {
+      if (!authenticate(req, res)) return;
       return json(res, 200, db.standupView(p.project_id));
     }
 
     p = match(method, pathname, { method: 'GET', path: '/api/burndown/:sprint_id' });
     if (p) {
+      if (!authenticate(req, res)) return;
       const data = db.burndownView(p.sprint_id);
       return data ? json(res, 200, data) : json(res, 404, { error: 'Sprint not found' });
     }
 
     p = match(method, pathname, { method: 'GET', path: '/api/velocity/:project_id' });
     if (p) {
+      if (!authenticate(req, res)) return;
       const count = parseInt(url.searchParams.get('count') || '5', 10);
       return json(res, 200, { sprints: db.velocityHistory(p.project_id, count) });
     }
