@@ -369,6 +369,11 @@ function authenticate(req, res) {
 
 const server = http.createServer(async (req, res) => {
   // GET /health — open, used by bridge for liveness.
+  // Do NOT leak sessionId here: /health is unauthenticated (intentionally —
+  // bridge liveness probes need it) and any co-located process could scrape
+  // the claude-agent-sdk session ID and resume/inspect the conversation.
+  // Expose only a boolean hasSession so operators can still tell whether the
+  // agent has bootstrapped its SDK session.
   if (req.method === 'GET' && req.url === '/health') {
     json(res, 200, {
       ok: true,
@@ -376,7 +381,7 @@ const server = http.createServer(async (req, res) => {
       persona: PARAMS.persona,
       busy,
       queued: messageQueue.length,
-      sessionId,
+      hasSession: !!sessionId,
     });
     return;
   }

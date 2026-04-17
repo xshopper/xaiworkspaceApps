@@ -551,8 +551,16 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`Token Market server listening on port ${PORT}`);
+// Cap per-connection idle time at 30s — slow-loris defense. Router/sync
+// calls to this server are short-lived HTTPS requests; nothing should idle
+// the socket beyond 30s.
+server.setTimeout(30_000);
+// Bind 127.0.0.1 only — never 0.0.0.0. GET /models + GET /listings are
+// unauthenticated and would otherwise be exposed to every process / network
+// neighbor sharing the host. This matches every other app in the monorepo
+// (agent, project-manager, done24bot, connect, claude-code).
+server.listen(PORT, '127.0.0.1', () => {
+  console.log(`Token Market server listening on 127.0.0.1:${PORT}`);
 
   // Auto-sync local keys to master on startup (bridge→router uses APP_BRIDGE_TOKEN)
   if (ROUTER_URL && BRIDGE_TOKEN) {
