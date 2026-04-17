@@ -93,8 +93,8 @@ export async function startCliOAuth(provider: string): Promise<{ authorize_url: 
 export async function pollCliOAuth(state: string, started_at: string, provider: string): Promise<{ status: string; message?: string }> {
   try {
     return await xai.cliproxy.pollOAuth(state, started_at, provider);
-  } catch (err: any) {
-    const msg = err?.message || '';
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : '';
     // Auth failures or explicit denials — stop polling
     if (msg.includes('Authentication required') || msg.includes('403') || msg.includes('forbidden')) {
       return { status: 'error', message: msg || 'OAuth session expired. Please try again.' };
