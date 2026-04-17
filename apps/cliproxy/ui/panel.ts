@@ -100,11 +100,11 @@ async function loadData() {
       tokenCardProvider = null;
       state.tokenStatus = null;
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     state.status = null; // don't show "Stopped" on network errors — status is unknown
     state.providers = [];
     state.tokenStatus = null;
-    state.error = err?.message ?? 'Could not reach CLIProxyAPI on localhost:4001';
+    state.error = (err instanceof Error ? err.message : String(err)) ?? 'Could not reach CLIProxyAPI on localhost:4001';
   } finally {
     state.loading = false;
     render();
@@ -136,8 +136,8 @@ async function handleUpdateToken() {
       state.error = result.error ?? 'Token update failed';
       state.success = null;
     }
-  } catch (err: any) {
-    state.error = err?.message ?? 'Token update failed';
+  } catch (err: unknown) {
+    state.error = (err instanceof Error ? err.message : String(err)) ?? 'Token update failed';
     state.success = null;
   } finally {
     state.savingToken = false;
@@ -273,9 +273,9 @@ async function handleOAuthConnect(providerId: string, label: string) {
           if (poll.status === 'slow_down') pollDelay = Math.min(pollDelay + 5000, 30000); // RFC 8628 §3.5
           scheduleOAuthPoll();
         }
-        } catch (err: any) {
+        } catch (err: unknown) {
           cleanupSession();
-          state.error = err?.message ?? 'OAuth polling failed unexpectedly';
+          state.error = (err instanceof Error ? err.message : String(err)) ?? 'OAuth polling failed unexpectedly';
           render();
         }
       }, pollDelay);
