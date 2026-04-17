@@ -58,6 +58,11 @@ persona:
 
 permissions:
   chat: [chat.send, chat.read]
+  # MCP transport binds 127.0.0.1:3470. Declared so the platform's singleton
+  # port tracker knows which port this app occupies (prevents collisions
+  # with other apps that want the same local port, e.g. done24bot used to
+  # also want 3470 and has been moved to 3471).
+  network: [localhost:3470]
 
 help: |
   Manage OAuth connections to third-party services.

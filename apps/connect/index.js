@@ -154,9 +154,17 @@ async function tool_disconnect(args) {
   return { ok: true };
 }
 
+// Provider slug format — must match the router's validation at
+// `xaiworkspace-backend/src/routes/oauth-connections-api.js` PROVIDER_RE
+// (`/^[a-z0-9][a-z0-9_-]{0,49}$/`). If the two ever diverge, the router is
+// the authoritative source of truth; calls with an invalid provider will
+// be rejected by the router anyway, but we reject client-side to get a
+// clearer error and avoid burning a router round-trip.
+const PROVIDER_RE = /^[a-z0-9][a-z0-9_-]{0,49}$/;
+
 function sanitizeProvider(p) {
   if (!p || typeof p !== 'string') throw new Error('provider is required');
-  if (!/^[a-z0-9][a-z0-9_-]{0,49}$/.test(p)) throw new Error('invalid provider name');
+  if (!PROVIDER_RE.test(p)) throw new Error('invalid provider name');
   return p;
 }
 
