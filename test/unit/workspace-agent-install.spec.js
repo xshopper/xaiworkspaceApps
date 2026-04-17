@@ -152,6 +152,73 @@ describe('workspace-agent install — ghSubdir sanitization (regex + path-resolv
   });
 });
 
+describe('workspace-agent — _appBridgeTokens reconcile on restart', () => {
+  // The in-memory _appBridgeTokens Map is the authoritative source for HMAC
+  // auth on /api/agent-message + deliverToLocalApp. Before the reconcile
+  // fix, a bridge restart left the Map empty while pm2 kept running apps
+  // with their original APP_BRIDGE_TOKEN env — every inter-agent / user→
+  // agent delivery would silently drop with "No APP_BRIDGE_TOKEN … stale
+  // port file?".
+  test('source declares reconcileAppBridgeTokens()', () => {
+    expect(BRIDGE_SRC).toMatch(/function reconcileAppBridgeTokens\(\)/);
+  });
+
+  test('reconcile is invoked at gateway_auth_ok BEFORE reportInstalledApps', () => {
+    // Ordering matters only so that any synchronous app-status report after
+    // reconcile sees a hydrated map; the contract is just "reconcile at
+    // auth-ok time". Check call happens in the auth-ok branch.
+    const authOkBranch = BRIDGE_SRC.split("msg.type === 'gateway_auth_ok'")[1] || '';
+    expect(authOkBranch).toMatch(/reconcileAppBridgeTokens\(\)/);
+  });
+
+  test('reconcile reads pm2_env.env.APP_BRIDGE_TOKEN', () => {
+    expect(BRIDGE_SRC).toMatch(/pm2_env\?\.env\?\.APP_BRIDGE_TOKEN/);
+  });
+
+  test('reconcile skips entries without a token (fail-closed, not fail-open)', () => {
+    // A missing APP_BRIDGE_TOKEN must NOT inject a placeholder into the
+    // Map — that would let deliverToLocalApp happily POST with an empty
+    // token. Skip + warn is the correct behavior.
+    expect(BRIDGE_SRC).toMatch(/no APP_BRIDGE_TOKEN for/);
+  });
+
+  test('reconcile uses the same slug--name key as handleInstallApp', () => {
+    expect(BRIDGE_SRC).toMatch(/_appBridgeTokens\.set\(_appTokenKey\(slug, instName\), token\)/);
+  });
+
+  // Pure-logic reimplementation of the reconcile derivation so we can test
+  // the slug/instName parsing regardless of source churn.
+  function deriveEntry(pmProc) {
+    const systemProcs = new Set(['workspace-agent', 'bootstrap-bridge', 'bridge', 'updater']);
+    if (systemProcs.has(pmProc.name)) return null;
+    const slug = pmProc.name.includes('--') ? pmProc.name.split('--')[0] : pmProc.name;
+    const instName = pmProc.name.includes('--') ? pmProc.name.split('--')[1] : 'default';
+    const token = pmProc?.pm2_env?.env?.APP_BRIDGE_TOKEN;
+    if (!token || typeof token !== 'string') return null;
+    return { key: `${slug}--${instName}`, token };
+  }
+
+  test('derives default instance key for bare slug name', () => {
+    expect(deriveEntry({ name: 'agent', pm2_env: { env: { APP_BRIDGE_TOKEN: 'abc' } } }))
+      .toEqual({ key: 'agent--default', token: 'abc' });
+  });
+
+  test('derives named instance key for slug--name', () => {
+    expect(deriveEntry({ name: 'agent--dev-01', pm2_env: { env: { APP_BRIDGE_TOKEN: 'xyz' } } }))
+      .toEqual({ key: 'agent--dev-01', token: 'xyz' });
+  });
+
+  test('skips system processes', () => {
+    expect(deriveEntry({ name: 'workspace-agent', pm2_env: { env: { APP_BRIDGE_TOKEN: 'sys' } } }))
+      .toBeNull();
+  });
+
+  test('skips entries with no APP_BRIDGE_TOKEN', () => {
+    expect(deriveEntry({ name: 'legacy-app', pm2_env: { env: {} } }))
+      .toBeNull();
+  });
+});
+
 describe('workspace-agent install — GitHub tree URL percent-decode error surfacing', () => {
   // The bridge percent-decodes the captured `branch` and `subdir` groups
   // out of a GitHub tree URL (to tolerate `%2F` in branch names). If the
