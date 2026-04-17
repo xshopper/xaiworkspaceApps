@@ -9,11 +9,37 @@
  */
 
 import http from 'node:http';
+import path from 'node:path';
 import { query, listSessions, getSessionMessages } from '@anthropic-ai/claude-agent-sdk';
 
 const PORT = parseInt(process.env.APP_PORT ?? '3457', 10);
-const CWD = process.env.CLAUDE_CODE_CWD ?? process.env.HOME ?? '/root';
+// The workspace root bounds any user-supplied `cwd` on /query. Prefer the
+// SDK-canonical `APP_DATA_DIR` (a sandboxed per-instance directory the
+// bridge creates for us) when available — it's the strongest contract.
+// Otherwise fall back to an explicit `APP_WORKSPACE_ROOT`, then `HOME`.
+// Anything the caller passes is resolved and must stay under this root.
+const WORKSPACE_ROOT = path.resolve(
+  process.env.APP_WORKSPACE_ROOT
+    ?? process.env.APP_DATA_DIR
+    ?? process.env.HOME
+    ?? '/root'
+);
+const CWD = process.env.CLAUDE_CODE_CWD ?? WORKSPACE_ROOT;
 const BRIDGE_TOKEN = process.env.APP_BRIDGE_TOKEN ?? '';
+
+/** True iff `candidate` resolves to a path inside `root` (or root itself). */
+function isUnderRoot(candidate, root) {
+  const resolved = path.resolve(candidate);
+  const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep;
+  return resolved === root || resolved.startsWith(rootWithSep);
+}
+
+// Sanity check the default CWD — if operator misconfigures CLAUDE_CODE_CWD
+// to escape the workspace we'd rather fail fast at startup than leak.
+if (!isUnderRoot(CWD, WORKSPACE_ROOT)) {
+  console.error(`[claude-code] FATAL: CLAUDE_CODE_CWD (${CWD}) escapes APP_WORKSPACE_ROOT (${WORKSPACE_ROOT}). Refusing to start.`);
+  process.exit(1);
+}
 
 // ---------------------------------------------------------------------------
 // Globals
@@ -46,8 +72,14 @@ async function runQuery(prompt, sessionId, cwd) {
 
   const options = {
     cwd: cwd || CWD,
-    permissionMode: 'bypassPermissions',
-    allowDangerouslySkipPermissions: true,
+    // Run in the SDK's `default` mode — every tool call goes through the
+    // SDK's approval flow. Do NOT set `allowDangerouslySkipPermissions:
+    // true`; that turned claude-code into an unguarded remote shell,
+    // which is especially dangerous here because POST /query accepts a
+    // caller-supplied cwd. If an installer needs autonomous execution
+    // they should wire an explicit `canUseTool` callback rather than
+    // globally bypassing the permission layer.
+    permissionMode: 'default',
     maxTurns: 50,
     abortController: controller,
   };
@@ -150,9 +182,16 @@ const server = http.createServer(async (req, res) => {
   }
 
   // -----------------------------------------------------------------------
-  // GET /sessions — list past Claude Code sessions
+  // GET /sessions — list past Claude Code sessions (auth required)
   // -----------------------------------------------------------------------
   if (req.method === 'GET' && req.url === '/sessions') {
+    // Session metadata (summaries, cwd, tags) is potentially sensitive —
+    // protect it behind the same APP_BRIDGE_TOKEN gate as the mutating
+    // POST endpoints. /health is intentionally left open.
+    if (!BRIDGE_TOKEN || req.headers['x-app-bridge-token'] !== BRIDGE_TOKEN) {
+      json(res, 401, { ok: false, error: 'Unauthorized' });
+      return;
+    }
     try {
       const sessions = await listSessions({ limit: 20 });
       json(res, 200, {
@@ -187,13 +226,25 @@ const server = http.createServer(async (req, res) => {
         json(res, 400, { ok: false, error: 'prompt is required' });
         return;
       }
+      // Caller-supplied cwd: must resolve under the workspace root. A naive
+      // acceptance of arbitrary cwd would let any authenticated caller
+      // point Claude Code at `/etc`, `/home/other-user`, or other
+      // filesystem areas outside the app's sandbox.
+      let effectiveCwd = CWD;
+      if (cwd !== undefined && cwd !== null && cwd !== '') {
+        if (typeof cwd !== 'string' || !isUnderRoot(cwd, WORKSPACE_ROOT)) {
+          json(res, 400, { ok: false, error: `cwd must resolve under workspace root ${WORKSPACE_ROOT}` });
+          return;
+        }
+        effectiveCwd = path.resolve(cwd);
+      }
       // Reject if a query is already running for this session
       if (sessionId && activeQueries.has(sessionId)) {
         json(res, 409, { ok: false, error: 'A query is already running for this session' });
         return;
       }
       try {
-        const result = await runQuery(prompt.trim(), sessionId, cwd);
+        const result = await runQuery(prompt.trim(), sessionId, effectiveCwd);
         json(res, 200, { ok: true, ...result });
       } catch (err) {
         console.error('[claude-code] query error:', err.message);
@@ -243,9 +294,35 @@ server.setTimeout(600_000);
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`[claude-code] ready on http://127.0.0.1:${PORT}`);
   console.log(`[claude-code] working directory: ${CWD}`);
+  console.log(`[claude-code] workspace root: ${WORKSPACE_ROOT}`);
 });
 
 server.on('error', err => {
   console.error('[claude-code] server error:', err.message);
   process.exit(1);
 });
+
+// ---------------------------------------------------------------------------
+// Graceful shutdown — abort in-flight queries and close the server
+// ---------------------------------------------------------------------------
+
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[claude-code] ${signal} — shutting down (${activeQueries.size} active queries)`);
+  // Abort every outstanding query so the SDK tears down subprocesses and
+  // releases tokens promptly instead of dragging on until the pm2 SIGKILL.
+  for (const controller of activeQueries.values()) {
+    try { controller.abort(); } catch { /* ignore */ }
+  }
+  activeQueries.clear();
+  try {
+    if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+  } catch { /* ignore */ }
+  server.close(() => process.exit(0));
+  // Safety net in case close() hangs on a lingering keep-alive.
+  setTimeout(() => process.exit(0), 5000).unref();
+}
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
