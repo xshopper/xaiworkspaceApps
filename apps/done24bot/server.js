@@ -296,11 +296,14 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
 
   // CORS — reflect allowlisted origins only. `Vary: Origin` tells caches
-  // the response depends on the request Origin header.
+  // the response depends on the request Origin header, so it MUST be set
+  // on every response regardless of whether the Origin was allowlisted
+  // — otherwise a cache that saw an allowlisted response could serve it
+  // to a disallowed origin.
+  res.setHeader('Vary', 'Origin');
   const allowedOrigin = pickAllowedOrigin(req.headers.origin);
   if (allowedOrigin) {
     res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
-    res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-App-Bridge-Token');
   }
