@@ -71,6 +71,11 @@ interface XaiTools {
   list(): Promise<any[]>;
 }
 
+interface XaiCliproxy {
+  startOAuth(provider: string): Promise<{ authorize_url: string; state: string; started_at: string }>;
+  pollOAuth(state: string, startedAt: string, provider: string): Promise<{ status: string; message?: string }>;
+}
+
 interface XaiSDK {
   render(html: string): void;
   http<T = any>(url: string, options?: XaiHttpOptions): Promise<XaiHttpResponse<T>>;
@@ -79,6 +84,8 @@ interface XaiSDK {
   memory: XaiMemory;
   device: XaiDevice;
   tools: XaiTools;
+  cliproxy: XaiCliproxy;
+  openUrl(url: string): Promise<void>;
   on(event: string, handler: (data: any) => void): void;
   request(action: string, data: any): Promise<any>;
   requestApproval(action: string, description: string, details?: string): Promise<boolean>;
