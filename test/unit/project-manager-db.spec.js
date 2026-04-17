@@ -1,18 +1,47 @@
 /**
  * project-manager / db.js — unit test skeletons.
  *
- * These tests exercise schema creation, basic CRUD, and sprint lifecycle
- * (activate / close) against an in-memory sqlite database. Skipped by
- * default because the module under test is ESM and Jest must be run with
- * `--experimental-vm-modules` to import it; the skip keeps `npm test` fast
- * while documenting the shape of the expected coverage.
+ * Schema / CRUD / sprint lifecycle tests run against an in-memory sqlite
+ * database. These are gated behind `describe.skip` until we run Jest with
+ * `--experimental-vm-modules` (the module is ESM); the authenticate() test
+ * below is pure-logic and runs unconditionally.
  *
- * To run:
+ * To run the skipped tests:
  *   NODE_OPTIONS='--experimental-vm-modules' npx jest test/unit/project-manager-db.spec.js
- *
- * Replace `describe.skip` with `describe` once we add an ESM-aware runner
- * (or convert db.js to a dual package).
  */
+
+describe('project-manager — authenticate() guard semantics', () => {
+  // Mirrors server.js:authenticate() — if BRIDGE_TOKEN is falsy (not
+  // configured) the function skips the header check and returns true.
+  // That's the contract: unconfigured auth = open mode (dev / local). If
+  // we ever tighten that (make missing token fail closed) this test must
+  // change in lockstep with server.js.
+  function authenticateLike(token, headerToken) {
+    if (token && headerToken !== token) return false;
+    return true;
+  }
+
+  test('unconfigured token (empty string) accepts any header', () => {
+    expect(authenticateLike('', undefined)).toBe(true);
+    expect(authenticateLike('', 'anything')).toBe(true);
+  });
+
+  test('unconfigured token (undefined) accepts any header', () => {
+    expect(authenticateLike(undefined, undefined)).toBe(true);
+  });
+
+  test('configured token rejects when header missing', () => {
+    expect(authenticateLike('secret', undefined)).toBe(false);
+  });
+
+  test('configured token rejects when header mismatches', () => {
+    expect(authenticateLike('secret', 'wrong')).toBe(false);
+  });
+
+  test('configured token accepts exact match', () => {
+    expect(authenticateLike('secret', 'secret')).toBe(true);
+  });
+});
 
 describe.skip('project-manager db.js', () => {
   let db;
@@ -23,6 +52,10 @@ describe.skip('project-manager db.js', () => {
     db = dbMod;
     // In-memory sqlite — `:memory:` works via better-sqlite3.
     db.init(':memory:');
+  });
+
+  afterEach(() => {
+    try { db.close(); } catch { /* ignore */ }
   });
 
   describe('projects', () => {
@@ -70,10 +103,4 @@ describe.skip('project-manager db.js', () => {
       expect(result.error).toMatch(/active/i);
     });
   });
-});
-
-// Non-skipped placeholder so `npm test` doesn't fail with "Your test suite
-// must contain at least one test." when only this file matches.
-test('project-manager db spec file loads', () => {
-  expect(true).toBe(true);
 });

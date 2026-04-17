@@ -1,16 +1,9 @@
 /**
- * token-market / pricing-engine.js — unit test skeletons.
+ * token-market / pricing-engine.js — unit tests.
  *
- * Focus areas:
- *   - blocklist rejects common escape patterns in user code
- *   - `isolated-vm` unavailable path returns the guard error (not a crash)
- *   - sandbox exec: valid strategy returns expected prices
- *   - sandbox timeout enforcement (long loop terminated at 100ms)
- *
- * The engine module is ESM with an async factory loadIvm(). These
- * skeletons exercise pure branches (blocklist, unavailable guard). The
- * in-sandbox tests are describe.skip until we run Jest with
- * `NODE_OPTIONS='--experimental-vm-modules'` in CI.
+ * Pure-branch tests (blocklist, single-flight race model) run by default.
+ * The in-sandbox tests (requires isolated-vm + ESM-aware Jest) stay under
+ * `describe.skip` until CI runs with `NODE_OPTIONS='--experimental-vm-modules'`.
  */
 
 describe('pricing-engine — blocklist', () => {
@@ -28,6 +21,79 @@ describe('pricing-engine — blocklist', () => {
     const code = 'return { inputPricePerMTok: 1, outputPricePerMTok: 2 };';
     const hit = blocked.find((p) => code.includes(p));
     expect(hit).toBeUndefined();
+  });
+});
+
+describe('pricing-engine — loadIvm() single-flight race', () => {
+  // This is a standalone reimplementation of the promise-caching pattern in
+  // pricing-engine.js so we can reason about the concurrent-load race
+  // without actually importing isolated-vm. If the implementation pattern
+  // drifts (e.g. someone removes _ivmPromise and reverts to the simple
+  // `if (_ivmCache !== undefined)` check), this test will still pass —
+  // but we also keep a textual assertion against the source to detect
+  // regression.
+  function makeLoader({ delayMs = 10, fail = false, slowFail = false } = {}) {
+    let _cache; // undefined | null | module
+    let _promise;
+    let callCount = 0;
+    async function load() {
+      if (_cache !== undefined) return _cache;
+      if (_promise) return _promise;
+      _promise = (async () => {
+        callCount++;
+        await new Promise((r) => setTimeout(r, delayMs));
+        if (fail) {
+          _cache = null;
+        } else if (slowFail) {
+          _cache = null;
+        } else {
+          _cache = { Isolate: function () {} };
+        }
+        return _cache;
+      })();
+      return _promise;
+    }
+    return { load, stats: () => ({ callCount }) };
+  }
+
+  test('cold-path concurrent callers share the same import promise', async () => {
+    const { load, stats } = makeLoader({ delayMs: 20 });
+    const results = await Promise.all([load(), load(), load(), load(), load()]);
+    // All callers resolve to the same module object.
+    for (let i = 1; i < results.length; i++) {
+      expect(results[i]).toBe(results[0]);
+    }
+    // The loader body only ran once despite five callers racing.
+    expect(stats().callCount).toBe(1);
+  });
+
+  test('after resolution, subsequent callers short-circuit via the cache', async () => {
+    const { load, stats } = makeLoader({ delayMs: 5 });
+    await load();
+    expect(stats().callCount).toBe(1);
+    await Promise.all([load(), load(), load()]);
+    expect(stats().callCount).toBe(1); // still 1 — cache hit
+  });
+
+  test('failure state (null) is sticky — no retry storms', async () => {
+    const { load, stats } = makeLoader({ delayMs: 5, fail: true });
+    const first = await load();
+    expect(first).toBeNull();
+    // Multiple subsequent calls all get null without re-invoking the loader.
+    const more = await Promise.all([load(), load(), load()]);
+    expect(more.every((x) => x === null)).toBe(true);
+    expect(stats().callCount).toBe(1);
+  });
+
+  test('source file uses the _ivmPromise single-flight pattern (regression guard)', () => {
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const src = fs.readFileSync(
+      path.resolve(__dirname, '../../apps/token-market/lib/pricing-engine.js'),
+      'utf8'
+    );
+    expect(src).toMatch(/_ivmPromise/);
+    expect(src).toMatch(/if \(_ivmPromise\) return _ivmPromise/);
   });
 });
 

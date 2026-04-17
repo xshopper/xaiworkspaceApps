@@ -49,7 +49,75 @@ describe('connect — provider slug regex', () => {
   });
 });
 
-describe.skip('connect — JSON-RPC dispatch', () => {
+describe('connect — MCP auth (checkMcpAuth logic)', () => {
+  // Re-implementation of the predicate from apps/connect/index.js — we
+  // cannot import the module without booting the HTTP server, but the
+  // logic is small enough to mirror here. If the source pattern changes
+  // (e.g. dropping timingSafeEqual) the textual regression guard below
+  // fails.
+  const crypto = require('node:crypto');
+
+  function checkAuth(configuredSecret, headerValue) {
+    const secretBuf = Buffer.from(configuredSecret, 'utf8');
+    if (!headerValue || typeof headerValue !== 'string') return false;
+    const provided = Buffer.from(headerValue, 'utf8');
+    if (provided.length !== secretBuf.length) return false;
+    try { return crypto.timingSafeEqual(provided, secretBuf); }
+    catch { return false; }
+  }
+
+  test('rejects when header missing', () => {
+    expect(checkAuth('secret', undefined)).toBe(false);
+    expect(checkAuth('secret', null)).toBe(false);
+  });
+
+  test('rejects when header is not a string', () => {
+    expect(checkAuth('secret', 42)).toBe(false);
+    expect(checkAuth('secret', { foo: 'bar' })).toBe(false);
+  });
+
+  test('rejects on length mismatch without throwing', () => {
+    expect(() => checkAuth('short', 'muchlongervalue')).not.toThrow();
+    expect(checkAuth('short', 'muchlongervalue')).toBe(false);
+  });
+
+  test('rejects on byte mismatch (same length)', () => {
+    expect(checkAuth('aaaaaa', 'bbbbbb')).toBe(false);
+  });
+
+  test('accepts exact match', () => {
+    expect(checkAuth('topsecret', 'topsecret')).toBe(true);
+  });
+
+  test('source file uses crypto.timingSafeEqual (regression guard)', () => {
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const src = fs.readFileSync(
+      path.resolve(__dirname, '../../apps/connect/index.js'),
+      'utf8'
+    );
+    expect(src).toMatch(/crypto\.timingSafeEqual\(/);
+  });
+});
+
+describe('connect — APP_API_KEY naming (round 2 fix)', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const src = fs.readFileSync(
+    path.resolve(__dirname, '../../apps/connect/index.js'),
+    'utf8'
+  );
+
+  test('prefers APP_API_KEY, falls back to ANTHROPIC_API_KEY', () => {
+    expect(src).toMatch(/process\.env\.APP_API_KEY \|\| process\.env\.ANTHROPIC_API_KEY/);
+  });
+
+  test('warns when API_KEY looks like a real Anthropic key', () => {
+    expect(src).toMatch(/sk-ant-/);
+  });
+});
+
+describe.skip('connect — JSON-RPC dispatch (needs ESM runner)', () => {
   test('initialize returns serverInfo with @connect name', async () => {
     // const { handleJsonRpc } = await import('../../apps/connect/index.js');
     // const res = await handleJsonRpc({ id: 1, method: 'initialize' });
@@ -60,9 +128,5 @@ describe.skip('connect — JSON-RPC dispatch', () => {
     // const { handleJsonRpc } = await import('../../apps/connect/index.js');
     // const res = await handleJsonRpc({ id: 1, method: 'tools/call', params: { name: 'nope' } });
     // expect(res.error.code).toBe(-32601);
-  });
-
-  test('MCP auth rejects when X-MCP-Secret missing', async () => {
-    // Would test checkMcpAuth directly.
   });
 });
