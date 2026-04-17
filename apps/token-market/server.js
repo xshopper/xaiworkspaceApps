@@ -12,7 +12,7 @@ import http from 'node:http';
 import { URL } from 'node:url';
 import { PricingEngine } from './lib/pricing-engine.js';
 import { HealthMonitor } from './lib/health-monitor.js';
-import { RevenueLogger } from './lib/revenue-logger.js';
+import { RevenueLogger, REVENUE_LOGGING_ENABLED, REVENUE_LOGGING_DISABLED_REASON } from './lib/revenue-logger.js';
 import { LitellmClient } from './lib/litellm-client.js';
 
 const PORT = parseInt(process.env.APP_PORT ?? '3460', 10);
@@ -32,11 +32,26 @@ const litellm = new LitellmClient(LITELLM_URL, PLATFORM_KEY);
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-/** Read full request body as string. */
+// Cap HTTP body size at 1 MB. The completion hook is by far the largest
+// request body (LiteLLM forwards the full request/response envelope) and
+// all other handlers deal with small JSON, so 1 MB is plenty while still
+// protecting us from memory-exhaustion DoS via unbounded bodies.
+const MAX_BODY = 1024 * 1024;
+
+/** Read full request body as string. Rejects if body exceeds MAX_BODY. */
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on('data', (c) => chunks.push(c));
+    let total = 0;
+    req.on('data', (c) => {
+      total += c.length;
+      if (total > MAX_BODY) {
+        req.destroy();
+        reject(new Error(`Body too large (max ${MAX_BODY} bytes)`));
+        return;
+      }
+      chunks.push(c);
+    });
     req.on('end', () => resolve(Buffer.concat(chunks).toString()));
     req.on('error', reject);
   });
@@ -100,7 +115,16 @@ const routes = new Map();
 
 /** GET /health — server health check */
 routes.set('GET /health', (_req, res) => {
-  json(res, 200, { ok: true, version: '0.1.0', port: PORT });
+  json(res, 200, {
+    ok: true,
+    version: '0.1.0',
+    port: PORT,
+    // Revenue logging is currently disabled (dropped records logged in warn).
+    // Surfacing this here so operators can tell at a glance that no billing
+    // data is being collected — critical signal for a marketplace app.
+    revenueLogging: REVENUE_LOGGING_ENABLED,
+    revenueLoggingDisabledReason: REVENUE_LOGGING_ENABLED ? undefined : REVENUE_LOGGING_DISABLED_REASON,
+  });
 });
 
 // ── Models (local inventory) ─────────────────────────────────────────────
@@ -164,6 +188,15 @@ routes.set('GET /subscriptions', async (req, res) => {
 /** POST /subscriptions/:listingId — subscribe to a listing */
 routes.set('POST /subscriptions/:listingId', async (req, res, params) => {
   const token = authToken(req);
+  // Refuse new subscriptions to listings whose circuit breaker is open —
+  // otherwise we'd create buyer-visible subscriptions + virtual keys that
+  // are guaranteed to fail until the seller's key recovers.
+  if (!healthMonitor.isHealthy(params.listingId)) {
+    return json(res, 503, {
+      error: 'Listing is temporarily unavailable (circuit breaker open). Try again later.',
+      listingId: params.listingId,
+    });
+  }
   // 1. Ask router to create subscription record
   const sub = await routerFetch('POST', `/api/market/subscribe/${params.listingId}`, token);
   // 2. Generate LiteLLM virtual key scoped to the listing's model
@@ -352,6 +385,19 @@ routes.set('POST /hooks/completion', async (req, res) => {
   // Only process marketplace-routed requests
   if (!metadata?.subscription_id) return json(res, 200, { ok: true, marketplace: false });
 
+  // If the listing's circuit breaker is open, refuse to route/log this
+  // completion. LiteLLM should not be sending successful completions for
+  // a listing that is supposed to be disabled — reject the callback so the
+  // operator sees it and the buyer is not silently billed for a call that
+  // should have been blocked upstream.
+  const listingIdForHealth = metadata.listing_id ?? metadata.subscription_id;
+  if (!healthMonitor.isHealthy(listingIdForHealth)) {
+    return json(res, 503, {
+      error: 'Listing circuit breaker open — completion rejected',
+      listingId: listingIdForHealth,
+    });
+  }
+
   // Health tracking
   if (status_code >= 400) {
     await healthMonitor.recordFailure(metadata.listing_id ?? metadata.subscription_id, {
@@ -417,14 +463,39 @@ function matchRoute(method, pathname) {
 
 // ── HTTP server ──────────────────────────────────────────────────────────
 
+// Origins that are allowed to call this server via browser fetch. The
+// token-market panel is loaded inside a sandbox iframe served from the
+// bridge / router, so we reflect the request Origin only if it matches
+// one of these patterns. LiteLLM (which posts to /hooks/completion) calls
+// us server-to-server without a browser Origin header — those requests
+// are unaffected by CORS.
+const ALLOWED_ORIGINS = [
+  /^https:\/\/([a-z0-9-]+\.)?xaiworkspace\.com$/i,
+  /^https:\/\/([a-z0-9-]+\.)?xshopper\.com$/i,
+  /^http:\/\/localhost(:\d+)?$/,
+  /^http:\/\/127\.0\.0\.1(:\d+)?$/,
+];
+
+function pickAllowedOrigin(origin) {
+  if (!origin) return null;
+  return ALLOWED_ORIGINS.some((re) => re.test(origin)) ? origin : null;
+}
+
 const server = http.createServer(async (req, res) => {
-  // CORS for panel iframe
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  // Restrict CORS to known bridge/iframe origins rather than '*'. Server
+  // endpoints that require `Authorization` headers also require credentials,
+  // and wildcard origins with credentials is disallowed by browsers anyway.
+  const origin = req.headers.origin;
+  const allowedOrigin = pickAllowedOrigin(origin);
+  if (allowedOrigin) {
+    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  }
 
   if (req.method === 'OPTIONS') {
-    res.writeHead(204);
+    res.writeHead(allowedOrigin ? 204 : 403);
     return res.end();
   }
 

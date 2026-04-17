@@ -10,18 +10,37 @@
  * Constraints: 100ms CPU, 8MB memory, no I/O, no async.
  */
 
-let ivm;
-try {
-  ivm = await import('isolated-vm');
-  // Handle default export for ESM
-  if (ivm.default) ivm = ivm.default;
-} catch {
-  console.error('[FATAL] isolated-vm not available — pricing engine will refuse all code execution for safety');
-  ivm = null;
-}
+// ── isolated-vm lazy loader ──────────────────────────────────────────────
+//
+// We intentionally avoid top-level `await import('isolated-vm')`:
+//   - top-level await fails fast in environments that don't support it
+//     (older Node, certain bundlers), which would take the whole app down
+//     even though every other pricing-engine code path could still log
+//     "engine unavailable" gracefully.
+//   - a lazy factory lets us distinguish three states cleanly:
+//       _ivmCache === undefined → never attempted
+//       _ivmCache === null      → attempted and failed (definitively unavailable)
+//       _ivmCache === <module>  → loaded successfully
+// The `=== null` guard in execute() is the explicit "unavailable" path;
+// `=== undefined` triggers the factory on first use.
+let _ivmCache; // undefined | null | module
 
-if (!ivm) {
-  console.warn('[WARN] isolated-vm is the sole security boundary for user-defined pricing code. Without it, ALL code execution is blocked. Install isolated-vm to enable the pricing engine.');
+async function loadIvm() {
+  if (_ivmCache !== undefined) return _ivmCache;
+  try {
+    const mod = await import('isolated-vm');
+    // Handle default export for ESM
+    _ivmCache = mod.default ?? mod;
+    if (!_ivmCache || typeof _ivmCache.Isolate !== 'function') {
+      console.error('[FATAL] isolated-vm loaded but exports are unexpected — refusing all code execution for safety');
+      _ivmCache = null;
+    }
+  } catch (err) {
+    console.error('[FATAL] isolated-vm not available — pricing engine will refuse all code execution for safety:', err?.message || err);
+    console.warn('[WARN] isolated-vm is the sole security boundary for user-defined pricing code. Without it, ALL code execution is blocked. Install isolated-vm to enable the pricing engine.');
+    _ivmCache = null;
+  }
+  return _ivmCache;
 }
 
 const MAX_EXECUTION_MS = 100;
@@ -99,14 +118,18 @@ export class PricingEngine {
   async execute(code, input) {
     const start = performance.now();
 
-    if (!ivm) {
+    const ivm = await loadIvm();
+    // `null` specifically means "attempted load, unavailable" — the guard
+    // path under test. `undefined` should never reach this point because
+    // loadIvm() always resolves to module-or-null.
+    if (ivm === null) {
       return { inputPricePerMTok: 0, outputPricePerMTok: 0, error: 'Pricing engine unavailable: isolated-vm not installed' };
     }
-    return this._executeIsolated(code, input, start);
+    return this._executeIsolated(ivm, code, input, start);
   }
 
   /** Execute in an isolated-vm V8 isolate (production). */
-  async _executeIsolated(code, input, start) {
+  async _executeIsolated(ivm, code, input, start) {
     const key = cacheKey(code);
     let isolate;
 

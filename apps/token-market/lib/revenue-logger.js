@@ -9,6 +9,13 @@ const FLUSH_INTERVAL_MS = 1000;
 const MAX_BUFFER_SIZE = 100;
 const PLATFORM_FEE_PERCENT = 5; // 5% platform cut on marketplace transactions
 
+// Feature flag — flipped to true in M1 when the trusted ingest path from
+// LiteLLM spend records lands. Exposed on the server's /health so operators
+// can see at a glance that revenue records are being dropped.
+export const REVENUE_LOGGING_ENABLED = false;
+export const REVENUE_LOGGING_DISABLED_REASON =
+  'POST /api/market/revenue/batch was removed as a fraud vector; re-introducing in M1 via LiteLLM spend ingest';
+
 export class RevenueLogger {
   /** @param {string} routerUrl  @param {string} apiKey */
   constructor(routerUrl, apiKey) {
