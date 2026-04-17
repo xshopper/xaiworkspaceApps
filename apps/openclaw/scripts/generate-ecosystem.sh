@@ -39,7 +39,18 @@ export _HAS_INOTIFY="$HAS_INOTIFY"
 node -e '
 const fs = require("fs");
 const path = require("path");
-const yaml = (() => { try { return require("js-yaml"); } catch { return null; } })();
+// js-yaml is a hard dependency (see package.json). Fail fast if it is
+// missing — the previous "minimal fallback parser" below was both
+// fragile (couldnt parse non-trivial YAML) and security-surface
+// expansion (its startup regex let `rm -rf /` through). Abort on load
+// failure rather than silently degrading to an unsafe path.
+let yaml;
+try {
+  yaml = require("js-yaml");
+} catch (err) {
+  console.error("[generate-ecosystem] FATAL: js-yaml is not installed. Run `pnpm install` in the openclaw app dir.");
+  process.exit(1);
+}
 
 const APP_DIR = process.env._APP_DIR;
 const HOME = process.env._HOME;
@@ -108,10 +119,33 @@ apps.push(
   },
 );
 
-// Scan other installed mini apps for startup entries
-// Allowed: word chars, space, path chars, && for chaining, = : for flags, quotes
-// Blocked: newlines, $, backtick, ;, single |, >, <, (, ), {, }
-const SAFE_STARTUP_RE = /^[\w ./\-~&=:\x27"]+$/;
+// Scan other installed mini apps for startup entries.
+//
+// SECURITY MODEL (tightened from the original character allowlist):
+//
+// The previous regex `^[\w ./\-~&=:\x27"]+$` accepted anything built from
+// alphanumerics, spaces, slashes, hyphens, quotes, and equals — which
+// happily let strings like `rm -rf /` pass validation. Since the startup
+// string is passed to `bash -c`, any argv we tolerate becomes unsandboxed
+// shell.
+//
+// New model: the startup value must either be a path under the apps
+// directory, OR it must begin with an allowlisted interpreter followed by
+// a space. After the prefix we still reject shell metacharacters that would
+// let the command branch into unrelated binaries (backtick, dollar-paren,
+// pipes, semicolons, redirection, comment markers).
+const ALLOWED_STARTUP_PREFIXES = [
+  "node ",
+  "bash ",
+  "sh ",
+  "python3 ",
+  "pnpm ",
+  "npm ",
+];
+// Characters that enable command chaining / substitution / redirection.
+// Even if the prefix is safe, an attacker could tack on `; evil` after a
+// legitimate `node index.js` to execute arbitrary code.
+const FORBIDDEN_STARTUP_CHARS = /[`$|;<>(){}]/;
 const appsDir = path.join(HOME, "apps");
 if (fs.existsSync(appsDir)) {
   for (const entry of fs.readdirSync(appsDir)) {
@@ -127,19 +161,7 @@ if (fs.existsSync(appsDir)) {
     let manifest;
     try {
       const raw = fs.readFileSync(manifestPath, "utf8");
-      if (yaml) {
-        manifest = yaml.load(raw);
-      } else {
-        // Minimal YAML parsing: extract slug and startup fields
-        const slugMatch = raw.match(/^slug:\s*(.+)$/m);
-        const startupMatch = raw.match(/^startup:\s*"(.+?)"\s*$/m)
-          || raw.match(/^startup:\s*\x27(.+?)\x27\s*$/m)
-          || raw.match(/^startup:\s*([^\s#].+?)\s*$/m);
-        manifest = {
-          slug: slugMatch ? slugMatch[1].trim() : entry,
-          startup: startupMatch ? startupMatch[1].trim() : null,
-        };
-      }
+      manifest = yaml.load(raw);
     } catch { continue; }
 
     const slug = manifest.slug || entry;
@@ -151,19 +173,43 @@ if (fs.existsSync(appsDir)) {
       console.error("WARNING: Skipping app-" + slug + " — startup contains control characters");
       continue;
     }
-    // Block standalone & (background operator) — distinct from && (chaining)
-    // This check MUST precede SAFE_STARTUP_RE because that regex allows & chars (for &&)
-    if (/(?<![&])&(?![&])/.test(startup)) {
-      console.error("WARNING: Skipping app-" + slug + " — startup uses background operator &");
+    // Block standalone & (background operator). `&&` chaining is also
+    // disallowed by the forbidden-chars check below (we require a single
+    // command, not chains).
+    if (/&/.test(startup)) {
+      console.error("WARNING: Skipping app-" + slug + " — startup contains & (background / chaining)");
       continue;
     }
-    // Validate startup command against allowlist to prevent shell injection
-    if (!SAFE_STARTUP_RE.test(startup)) {
-      console.error("WARNING: Skipping app-" + slug + " — startup contains unsafe characters: " + startup.slice(0, 100));
+    if (FORBIDDEN_STARTUP_CHARS.test(startup)) {
+      console.error("WARNING: Skipping app-" + slug + " — startup contains forbidden shell metacharacter: " + startup.slice(0, 100));
       continue;
     }
     if (startup.length > 500) {
       console.error("WARNING: Skipping app-" + slug + " — startup too long (" + startup.length + " chars)");
+      continue;
+    }
+
+    // Startup must either (a) begin with an allowlisted interpreter + space
+    // or (b) be a path inside the app directory (resolved with realpath
+    // equivalence; symlinks that point outside are rejected).
+    const hasAllowedPrefix = ALLOWED_STARTUP_PREFIXES.some((p) => startup.startsWith(p));
+    let startupOk = hasAllowedPrefix;
+    if (!startupOk) {
+      // Treat the first whitespace-separated token as the command path.
+      const firstTok = startup.split(/\s+/)[0] || "";
+      try {
+        const resolved = path.resolve(appDir, firstTok);
+        const realAppDir = fs.realpathSync(appDir);
+        // realpathSync may fail if the file does not exist — fall back to
+        // resolved path containment.
+        let realResolved = resolved;
+        try { realResolved = fs.realpathSync(resolved); } catch { /* ok */ }
+        const rootWithSep = realAppDir.endsWith(path.sep) ? realAppDir : realAppDir + path.sep;
+        startupOk = realResolved === realAppDir || realResolved.startsWith(rootWithSep);
+      } catch { startupOk = false; }
+    }
+    if (!startupOk) {
+      console.error("WARNING: Skipping app-" + slug + " — startup must begin with an allowed interpreter (" + ALLOWED_STARTUP_PREFIXES.map((p) => p.trim()).join(", ") + ") or resolve to a path under " + appDir + ". Got: " + startup.slice(0, 100));
       continue;
     }
 

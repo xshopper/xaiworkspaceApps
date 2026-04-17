@@ -5,7 +5,7 @@
   "description": "OpenClaw gateway mini app — bridge relay and process management",
   "dependencies": {
     "js-yaml": "^4.1.0",
-    "openclaw": "latest",
+    "openclaw": "^2026.4.15",
     "ws": "^8.18.0"
   }
 }
