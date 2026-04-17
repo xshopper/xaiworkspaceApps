@@ -6,14 +6,41 @@ const BASE_URL = process.env.E2E_BASE_URL || 'https://xaiworkspace.com';
 let browser: Browser;
 let page: Page;
 
+// Only endpoints under this host are considered valid WS targets. We pin
+// the expected domain to reject a compromised/typosquatted outputs file
+// that returns e.g. `wss://evil.example.com/foo` from the build.
+const EXPECTED_WS_HOST_SUFFIX = '.done24bot.com';
+const EXPECTED_WS_HOST_EXACT = 'done24bot.com';
+
+function assertTrustedWsUrl(url: string): string {
+  const parsed = new URL(url);
+  if (parsed.protocol !== 'wss:' && parsed.protocol !== 'ws:') {
+    throw new Error(`Untrusted WS URL protocol: ${parsed.protocol}`);
+  }
+  if (parsed.hostname !== EXPECTED_WS_HOST_EXACT && !parsed.hostname.endsWith(EXPECTED_WS_HOST_SUFFIX)) {
+    throw new Error(`Untrusted WS URL host: ${parsed.hostname} (expected done24bot.com or *.done24bot.com)`);
+  }
+  return url;
+}
+
 /**
- * Fetch the real WebSocket URL from done24bot_outputs.json.
+ * Resolve the WebSocket URL used by the E2E harness.
+ *
+ * Precedence:
+ *   1. `E2E_WS_URL` env var — lets CI/developers pin a specific endpoint
+ *      (e.g. a staging env, a local tunnel). Validated against the expected
+ *      host pattern so a typo can't silently redirect traffic.
+ *   2. Fetch done24bot's public outputs file as a last resort. The returned
+ *      URL is also pattern-validated before we hand it to puppeteer.
  */
 async function getWsUrl(): Promise<string> {
+  const override = process.env.E2E_WS_URL;
+  if (override) return assertTrustedWsUrl(override);
+
   const res = await fetch('https://done24bot.com/done24bot_outputs.json');
   const config: any = await res.json();
   const ws = config.custom.WEBSOCKET_API;
-  return `${ws.endpoint}/${ws.stageName}`;
+  return assertTrustedWsUrl(`${ws.endpoint}/${ws.stageName}`);
 }
 
 const EMAIL = process.env.E2E_EMAIL || process.env.TEST_EMAIL || '';
@@ -64,7 +91,16 @@ async function loginFlow(p: Page) {
     if (passInput) { passInput.value = password; passInput.dispatchEvent(new Event('input', { bubbles: true })); }
   }, EMAIL, PASSWORD);
 
-  await new Promise(r => setTimeout(r, 2_000));
+  // Wait for the inputs to have been accepted by Angular (password field
+  // value reflected through ngModel) rather than guessing with setTimeout.
+  await p.waitForFunction(
+    () => {
+      const email = document.querySelector('input[type="email"]') as HTMLInputElement | null;
+      const pass = document.querySelector('input[type="password"]') as HTMLInputElement | null;
+      return !!email?.value && !!pass?.value;
+    },
+    { timeout: 5_000 }
+  );
 
   // Try to click Turnstile CAPTCHA
   const turnstileBox = await p.evaluate(() => {
@@ -77,7 +113,16 @@ async function loginFlow(p: Page) {
   });
   if (turnstileBox.found) {
     await p.mouse.click(turnstileBox.x, turnstileBox.y);
-    await new Promise(r => setTimeout(r, 5_000));
+    // Wait for the Turnstile iframe to signal challenge-passed rather than
+    // hard-sleeping for 5s. Cloudflare's widget adds the hidden
+    // `cf-turnstile-response` input to the form once solved.
+    await p.waitForFunction(
+      () => {
+        const tok = document.querySelector('input[name="cf-turnstile-response"]') as HTMLInputElement | null;
+        return !!tok && tok.value.length > 0;
+      },
+      { timeout: 15_000 }
+    ).catch(() => { /* headless Turnstile sometimes auto-passes without token */ });
   }
 
   // Wait for submit to enable and click
@@ -147,8 +192,15 @@ export async function sendMessage(p: Page, text: string): Promise<string> {
     textarea.dispatchEvent(new Event('compositionend', { bubbles: true }));
   }, text);
 
-  // Give Angular a tick to process ngModel and enable the button
-  await new Promise(r => setTimeout(r, 500));
+  // Wait for Angular to process ngModel and enable the send button
+  // (previously a 500ms sleep — this waits for the actual state we need).
+  await p.waitForFunction(
+    () => {
+      const btn = document.querySelector('.chat-send-btn') as HTMLButtonElement | null;
+      return !!btn && !btn.disabled;
+    },
+    { timeout: 5_000 }
+  );
 
   // Click send
   await p.evaluate(() => {
@@ -168,26 +220,23 @@ export async function sendMessage(p: Page, text: string): Promise<string> {
     botCountBefore
   );
 
-  // Poll until typing indicator disappears and content appears (up to 60s)
-  let botText = '';
-  for (let i = 0; i < 30; i++) {
-    await new Promise(r => setTimeout(r, 2_000));
-    const result = await p.evaluate(() => {
+  // Wait for typing indicator to disappear and content to appear. Single
+  // waitForFunction instead of a 30-iteration × 2s poll loop; returns the
+  // rendered text via the `handle.jsonValue()` round-trip.
+  const handle = await p.waitForFunction(
+    () => {
       const msgs = document.querySelectorAll('.chat-message--bot');
       const last = msgs[msgs.length - 1];
-      if (!last) return { done: false, text: '' };
+      if (!last) return false;
       const typing = last.querySelector('.chat-typing');
       const textEl = last.querySelector('.chat-message-text') || last.querySelector('.chat-message-content');
       const text = textEl ? (textEl as HTMLElement).innerText.trim() : (last as HTMLElement).innerText.trim();
-      return { done: !typing && text.length > 0, text };
-    });
-    if (result.done) {
-      botText = result.text;
-      break;
-    }
-  }
+      return !typing && text.length > 0 ? text : false;
+    },
+    { timeout: 60_000 }
+  ).catch(() => null);
 
-  return botText;
+  return handle ? String(await handle.jsonValue()) : '';
 }
 
 /**
