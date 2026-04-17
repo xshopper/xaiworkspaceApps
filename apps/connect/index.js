@@ -45,13 +45,28 @@ const PKG_VERSION = (() => {
 const APP_SLUG = 'connect';
 const PORT = parseInt(process.env.APP_PORT || '3470', 10);
 const ROUTER_URL = (process.env.ROUTER_URL || process.env.BRIDGE_URL || '').replace(/\/$/, '');
-const API_KEY = process.env.ANTHROPIC_API_KEY || '';
+// `APP_API_KEY` is the preferred env var for the LiteLLM virtual key that
+// identifies this mini-app to the router. Historically this was called
+// `ANTHROPIC_API_KEY` (the name the Claude SDK expects), which caused two
+// concrete problems:
+//   1. Operators pasting a real Anthropic production key (`sk-ant-...`)
+//      under this name would leak it to the router, which treats the
+//      value as an opaque Bearer — not a severe breach, but a clear
+//      semantic smell.
+//   2. Anything that auto-fills `ANTHROPIC_API_KEY` from the host (CLI
+//      tools, VS Code Anthropic plugins) would override our virtual key.
+// We accept either name, prefer APP_API_KEY, and warn loudly if the
+// provided value looks like a real Anthropic key (prefix `sk-ant-`).
+const API_KEY = process.env.APP_API_KEY || process.env.ANTHROPIC_API_KEY || '';
 
 if (!ROUTER_URL) {
   console.warn('[connect] WARNING: Neither ROUTER_URL nor BRIDGE_URL is set — router calls will fail. Set ROUTER_URL to the router base URL (e.g. https://router.xaiworkspace.com)');
 }
 if (!API_KEY) {
-  console.warn('[connect] WARNING: ANTHROPIC_API_KEY is not set — router calls will fail. This env var should be provided by the bridge as the mini-app LiteLLM virtual key.');
+  console.warn('[connect] WARNING: APP_API_KEY is not set — router calls will fail. This env var should be provided by the bridge as the mini-app LiteLLM virtual key (legacy name: ANTHROPIC_API_KEY).');
+}
+if (API_KEY.startsWith('sk-ant-')) {
+  console.warn('[connect] WARNING: API_KEY looks like a real Anthropic API key (sk-ant- prefix). This var should be a LiteLLM virtual key issued by the bridge, not a production Anthropic key. Check bridge/pm2 env.');
 }
 
 const FETCH_TIMEOUT_MS = 10_000;
@@ -95,7 +110,7 @@ function checkMcpAuth(req) {
 
 async function routerFetch(method, path, body) {
   if (!ROUTER_URL) throw new Error('ROUTER_URL is not configured — cannot reach router');
-  if (!API_KEY) throw new Error('ANTHROPIC_API_KEY is not configured — cannot authenticate to router');
+  if (!API_KEY) throw new Error('APP_API_KEY (or legacy ANTHROPIC_API_KEY) is not configured — cannot authenticate to router');
   const url = `${ROUTER_URL}${path}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);

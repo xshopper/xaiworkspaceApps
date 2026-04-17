@@ -114,9 +114,17 @@ else
 fi
 curl -sf http://localhost:4001/v1/models -H "Authorization: Bearer local-only" | jq -r '.data[].id'
 
-# Register models with the platform
+# Register models with the platform.
+# PLATFORM_KEY is the LiteLLM virtual key identifying this mini-app to the
+# router — not a real Anthropic API key. Prefer APP_API_KEY (the SDK's
+# canonical name for bridge-issued virtual keys); fall back to
+# ANTHROPIC_API_KEY for historical installs. Warn if the value looks like a
+# real sk-ant- Anthropic key — those should never end up here.
 ROUTER_URL="${ROUTER_URL:-${ANTHROPIC_BASE_URL%/v1}}"
-PLATFORM_KEY="${ANTHROPIC_API_KEY:-local-only}"
+PLATFORM_KEY="${APP_API_KEY:-${ANTHROPIC_API_KEY:-local-only}}"
+case "$PLATFORM_KEY" in
+  sk-ant-*) echo "[cliproxy] WARNING: PLATFORM_KEY looks like a real Anthropic key (sk-ant- prefix). Expect a LiteLLM virtual key from the bridge." >&2 ;;
+esac
 if [ -n "$ROUTER_URL" ] && [ "$ROUTER_URL" != "local-only" ]; then
   MODELS=$(curl -sf http://localhost:4001/v1/models -H "Authorization: Bearer local-only" \
     | jq '[.data[] | {name: .id, provider: "cliproxy"}]')
