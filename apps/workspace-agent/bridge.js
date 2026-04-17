@@ -1087,7 +1087,16 @@ async function handleInstallApp(msg) {
       } else if (manifest?.startup) {
         const startupCmd = String(manifest.startup).trim();
         if (startupCmd.length > MAX_COMMAND_LENGTH || /[;`|><&\n\r]|\$[\({]/.test(startupCmd)) {
+          // Previously only warned and silently dropped the install. The
+          // router (and therefore the user) then saw install_result=ok for
+          // an app that was never started. Surface the reject as an
+          // operator-visible install_result=error so ops can spot the
+          // misconfigured manifest.
+          const reason = `Unsafe manifest.startup — must not contain shell metacharacters (; \` | > < & newline $( ${'${'}) or exceed ${MAX_COMMAND_LENGTH} chars`;
           console.warn(`[workspace-agent] Rejected unsafe manifest.startup for ${slug}: ${startupCmd.slice(0, 60)}`);
+          send({ type: 'install_result', id, slug, name: instName, status: 'error', error: reason });
+          _installingApps.delete(installKey);
+          return;
         } else {
           const startupParts = startupCmd.split(/\s+/);
           const instanceEcoFile = instName === 'default' ? ecoFile : path.join(appDir, `ecosystem.${instName}.config.js`);
@@ -1544,9 +1553,24 @@ async function deliverToLocalApp(slug, name, message) {
     const port = parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10);
     if (!port) return false;
 
+    // Fail-closed target apps (e.g. apps/agent /message + /reset) require
+    // the per-install APP_BRIDGE_TOKEN on inbound deliveries. We generated
+    // that token at install time and stored it in `_appBridgeTokens`; look
+    // it up by the same (slug, name) key the pm2 env uses. If the token
+    // is missing, drop the delivery (the target would 401 anyway) and log
+    // — this is likely a stale port file from a previous bridge process
+    // that lost its in-memory map on restart.
+    const token = _appBridgeTokens.get(_appTokenKey(slug, name));
+    if (!token) {
+      console.warn(`[workspace-agent] No APP_BRIDGE_TOKEN for ${slug}/${name} — dropping delivery (stale port file?)`);
+      return false;
+    }
     const res = await fetch(`http://127.0.0.1:${port}/message`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-App-Bridge-Token': token,
+      },
       body: JSON.stringify(message),
     });
     return res.ok;

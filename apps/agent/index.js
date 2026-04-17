@@ -46,6 +46,13 @@ const AGENT_NAME = process.env.APP_INSTANCE_NAME || 'default';
 // at install time. Rejects anything that could escape template-literal contexts
 // (the system prompt, shell commands in tool-generated curl examples, etc.).
 // Router is the authoritative check; this is a last-line safety net.
+//
+// process.exit(1) on a bad name will trigger pm2 to restart the process,
+// and without a restart cap pm2 will retry forever (busy-looping on a
+// config error that no retry will ever fix). Ecosystem templates that
+// launch apps/agent MUST set `max_restarts: 3` (or similar) so pm2 gives
+// up after a few failed starts. See apps/workspace-agent/bridge.js
+// ecosystem generation and apps/openclaw/scripts/generate-ecosystem.sh.
 if (!/^[a-z0-9][a-z0-9-]{0,49}$/.test(AGENT_NAME) || AGENT_NAME.includes('--')) {
   console.error(`[agent] FATAL: APP_INSTANCE_NAME "${AGENT_NAME}" does not match ^[a-z0-9][a-z0-9-]{0,49}$ (no "--")`);
   process.exit(1);
@@ -349,8 +356,19 @@ function json(res, status, data) {
   res.end(body);
 }
 
+// Fail-closed auth gate. Mirrors the project-manager/done24bot pattern:
+// if BRIDGE_TOKEN is unset, every authenticated endpoint returns 401.
+// `/health` is intentionally open so bridge liveness probes still work.
+function authenticate(req, res) {
+  if (!BRIDGE_TOKEN || req.headers['x-app-bridge-token'] !== BRIDGE_TOKEN) {
+    json(res, 401, { ok: false, error: 'Unauthorized' });
+    return false;
+  }
+  return true;
+}
+
 const server = http.createServer(async (req, res) => {
-  // GET /health
+  // GET /health — open, used by bridge for liveness.
   if (req.method === 'GET' && req.url === '/health') {
     json(res, 200, {
       ok: true,
@@ -365,6 +383,7 @@ const server = http.createServer(async (req, res) => {
 
   // POST /message — receive app_message or user_input from bridge
   if (req.method === 'POST' && req.url === '/message') {
+    if (!authenticate(req, res)) return;
     try {
       const body = await readBody(req);
       // Fast-path for the overflow case: respond 429 synchronously and
@@ -386,6 +405,7 @@ const server = http.createServer(async (req, res) => {
 
   // POST /reset — clear session (start fresh)
   if (req.method === 'POST' && req.url === '/reset') {
+    if (!authenticate(req, res)) return;
     sessionId = null;
     messageQueue.length = 0;
     // Clearing `busy` is essential: if /reset arrives while a Claude Code
@@ -416,6 +436,12 @@ server.listen(PORT, '127.0.0.1', () => {
 
   console.log(`[agent:${AGENT_NAME}] ready on http://127.0.0.1:${actualPort}`);
   console.log(`[agent:${AGENT_NAME}] persona=${PARAMS.persona} cwd=${CWD}`);
+  if (!BRIDGE_TOKEN) {
+    console.warn(
+      `[agent:${AGENT_NAME}] WARNING: APP_BRIDGE_TOKEN is not set. /message and /reset will return 401. ` +
+      'This is the fail-closed default; the bridge should inject APP_BRIDGE_TOKEN at pm2 start.'
+    );
+  }
 });
 
 server.on('error', err => {
