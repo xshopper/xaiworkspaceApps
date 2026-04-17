@@ -47,7 +47,20 @@ const SECRETS_FILE = '/etc/xai/secrets.env';
 if (fs.existsSync(SECRETS_FILE)) {
   for (const line of fs.readFileSync(SECRETS_FILE, 'utf8').split('\n')) {
     const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
-    if (m && !process.env[m[1]]) process.env[m[1]] = m[2];
+    if (m && !process.env[m[1]]) {
+      let val = m[2];
+      // Strip surrounding matched single or double quotes — some secret
+      // writers (including us) emit `KEY="value"` and we would otherwise
+      // propagate the literal quote characters into the env var.
+      if (val.length >= 2) {
+        const first = val[0];
+        const last = val[val.length - 1];
+        if ((first === '"' || first === "'") && first === last) {
+          val = val.slice(1, -1);
+        }
+      }
+      process.env[m[1]] = val;
+    }
   }
 }
 
@@ -615,6 +628,12 @@ function reportInstalledApps() {
 
 // ── URL validation for app installs ─────────────────────────────────────────
 
+// Exact-match allowlist of hostnames we accept artifact/source downloads from.
+// Anything else is rejected. We deliberately DO include `xaiworkspace.com`
+// wildcard coverage below (router assets, test env subdomains, and CDN
+// hosts under the root domain) but intentionally avoid suffix match for
+// third-party hosts like `github.com` where subdomain takeover risk is
+// non-zero.
 const TRUSTED_DOMAINS = new Set([
   'github.com',
   'api.github.com',
@@ -626,12 +645,31 @@ const TRUSTED_DOMAINS = new Set([
   'apps.xaiworkspace.com',
 ]);
 
+// Suffix-match allowlist: only these roots are accepted for *.root matching.
+// GitHub + npm are exact-match only because they host untrusted user content
+// on arbitrary subdomains (e.g. `pages.github.com`, *.github.io) that we do
+// not want to inherit trust.
+//
+// `xaiworkspace.com` is suffix-matched because all legitimate artifact/asset
+// hosts are under it:
+//   - apps.xaiworkspace.com, test-apps.xaiworkspace.com
+//   - router.xaiworkspace.com, test-router.xaiworkspace.com
+//   - dev001.xaiworkspace.com, app-dev001.xaiworkspace.com
+//   - cdn.xaiworkspace.com (if added later)
+// and we control the DNS zone.
+const SUFFIX_TRUSTED_DOMAINS = new Set([
+  'xaiworkspace.com',
+]);
+
 function isUrlTrusted(url) {
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== 'https:') return false;
-    return TRUSTED_DOMAINS.has(parsed.hostname)
-      || [...TRUSTED_DOMAINS].some(d => parsed.hostname.endsWith('.' + d));
+    if (TRUSTED_DOMAINS.has(parsed.hostname)) return true;
+    for (const d of SUFFIX_TRUSTED_DOMAINS) {
+      if (parsed.hostname === d || parsed.hostname.endsWith('.' + d)) return true;
+    }
+    return false;
   } catch {
     return false;
   }
@@ -738,17 +776,29 @@ async function handleInstallApp(msg) {
     const safeIdSuffix = (id || '').replace(/[^a-zA-Z0-9-]/g, '').slice(0, 8);
 
     if (artifactUrl) {
+      // SHA-256 is mandatory for any zip artifact install. Without it we would
+      // extract and execute `install.sh` / `npm install` on an unverified
+      // payload — the artifact host (or any on-path attacker) could swap
+      // binaries. Router always includes `sha256` for published releases;
+      // reject missing/malformed digests rather than silently trust.
+      if (!msg.sha256 || typeof msg.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(msg.sha256)) {
+        send({ type: 'install_result', id, slug, name: instName, status: 'error', error: 'Missing or invalid sha256 digest — artifact installs require a 64-char hex sha256 for integrity verification' });
+        _installingApps.delete(installKey);
+        return;
+      }
+
       const tmpFile = `/tmp/app-${slug}-${safeIdSuffix}.zip`;
       // Use execFileAsync (no shell) to avoid injection via URL path/query
       await execFileAsync('curl', ['-sfL', artifactUrl, '-o', tmpFile], { timeout: 60000 });
 
-      if (msg.sha256) {
+      {
         const crypto = require('crypto');
         const fileBuffer = fs.readFileSync(tmpFile);
         const hash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
-        if (hash !== msg.sha256) {
+        if (hash.toLowerCase() !== msg.sha256.toLowerCase()) {
           send({ type: 'install_result', id, slug, name: instName, status: 'error', error: `Artifact integrity check failed (expected ${msg.sha256.slice(0, 8)}..., got ${hash.slice(0, 8)}...)` });
           try { fs.unlinkSync(tmpFile); } catch {}
+          _installingApps.delete(installKey);
           return;
         }
         console.log(`[workspace-agent] Artifact integrity verified: ${hash.slice(0, 8)}...`);
