@@ -10,24 +10,35 @@
  *   NODE_OPTIONS='--experimental-vm-modules' npx jest test/unit/project-manager-db.spec.js
  */
 
-describe('project-manager — authenticate() guard semantics', () => {
-  // Mirrors server.js:authenticate() — if BRIDGE_TOKEN is falsy (not
-  // configured) the function skips the header check and returns true.
-  // That's the contract: unconfigured auth = open mode (dev / local). If
-  // we ever tighten that (make missing token fail closed) this test must
-  // change in lockstep with server.js.
+describe('project-manager — authenticate() guard semantics (fail-closed)', () => {
+  // Mirrors server.js:authenticate() — round-4 contract. If BRIDGE_TOKEN is
+  // falsy (not configured) we FAIL CLOSED: every authenticated endpoint
+  // returns 401. This is the opposite of the pre-round-4 "open mode" and
+  // is enforced by:
+  //   if (!BRIDGE_TOKEN || req.headers['x-app-bridge-token'] !== BRIDGE_TOKEN)
+  // Any regression that reintroduces open-mode fallback MUST fail this
+  // suite (see the "unconfigured" cases below).
   function authenticateLike(token, headerToken) {
-    if (token && headerToken !== token) return false;
+    if (!token || headerToken !== token) return false;
     return true;
   }
 
-  test('unconfigured token (empty string) accepts any header', () => {
-    expect(authenticateLike('', undefined)).toBe(true);
-    expect(authenticateLike('', 'anything')).toBe(true);
+  test('unconfigured token (empty string) rejects all requests', () => {
+    expect(authenticateLike('', undefined)).toBe(false);
+    expect(authenticateLike('', 'anything')).toBe(false);
+    // Even a header matching the empty string must be rejected — that was
+    // the classic open-mode bypass.
+    expect(authenticateLike('', '')).toBe(false);
   });
 
-  test('unconfigured token (undefined) accepts any header', () => {
-    expect(authenticateLike(undefined, undefined)).toBe(true);
+  test('unconfigured token (undefined) rejects all requests', () => {
+    expect(authenticateLike(undefined, undefined)).toBe(false);
+    expect(authenticateLike(undefined, 'anything')).toBe(false);
+  });
+
+  test('unconfigured token (null) rejects all requests', () => {
+    expect(authenticateLike(null, undefined)).toBe(false);
+    expect(authenticateLike(null, 'anything')).toBe(false);
   });
 
   test('configured token rejects when header missing', () => {
@@ -40,6 +51,19 @@ describe('project-manager — authenticate() guard semantics', () => {
 
   test('configured token accepts exact match', () => {
     expect(authenticateLike('secret', 'secret')).toBe(true);
+  });
+
+  test('server.js source enforces fail-closed (regression guard)', () => {
+    // Textual invariant: the authenticate() body must use `!BRIDGE_TOKEN ||`
+    // not `BRIDGE_TOKEN &&`. If anyone flips the operator back to the open-
+    // mode form, this regex miss will catch it.
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const src = fs.readFileSync(
+      path.resolve(__dirname, '../../apps/project-manager/server.js'),
+      'utf8'
+    );
+    expect(src).toMatch(/!BRIDGE_TOKEN\s*\|\|\s*req\.headers\['x-app-bridge-token'\]\s*!==\s*BRIDGE_TOKEN/);
   });
 });
 

@@ -71,6 +71,31 @@ describe('connect — MCP auth (checkMcpAuth logic)', () => {
     expect(checkAuth('secret', null)).toBe(false);
   });
 
+  test('empty configuredSecret — documents the open-mode pitfall + production fallback invariant', () => {
+    // Production apps/connect/index.js never calls checkAuth with an
+    // empty configuredSecret because MCP_SECRET = process.env... ||
+    // randomBytes(32). This test documents the degenerate cases so a
+    // future refactor that removes the fallback trips these assertions
+    // loudly.
+    //
+    // The `!headerValue` early-return is load-bearing: it rejects `''`
+    // and `undefined` before we reach timingSafeEqual. Without it,
+    // `checkAuth('', '')` would compare two zero-length buffers and
+    // return true — the classic open-mode bypass we must never have.
+    expect(checkAuth('', undefined)).toBe(false);
+    expect(checkAuth('', null)).toBe(false);
+    expect(checkAuth('', '')).toBe(false);       // empty header fails !headerValue guard
+    expect(checkAuth('', 'anything')).toBe(false); // length mismatch vs empty secret
+    // Source-level check that the production fallback is still in place.
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const src = fs.readFileSync(
+      path.resolve(__dirname, '../../apps/connect/index.js'),
+      'utf8'
+    );
+    expect(src).toMatch(/randomBytes\(32\)/);
+  });
+
   test('rejects when header is not a string', () => {
     expect(checkAuth('secret', 42)).toBe(false);
     expect(checkAuth('secret', { foo: 'bar' })).toBe(false);

@@ -151,3 +151,43 @@ describe('workspace-agent install — ghSubdir sanitization (regex + path-resolv
     expect(BRIDGE_SRC).toMatch(/Subdir escapes extract root/);
   });
 });
+
+describe('workspace-agent install — GitHub tree URL percent-decode error surfacing', () => {
+  // The bridge percent-decodes the captured `branch` and `subdir` groups
+  // out of a GitHub tree URL (to tolerate `%2F` in branch names). If the
+  // URL contains a malformed escape (lone `%`, `%GG`, truncated `%A`)
+  // decodeURIComponent throws URIError. Without a try/catch that bubbles
+  // up as an unhandled rejection and fails the install opaquely. The
+  // round-2 fix wraps both calls and throws a typed 'Invalid
+  // percent-encoding in source URL' error the user can actually read.
+  test('source wraps decodeURIComponent in try/catch with user-visible error', () => {
+    expect(BRIDGE_SRC).toMatch(/branchOrRef = decodeURIComponent\(ghMatch\[2\]\);/);
+    expect(BRIDGE_SRC).toMatch(/ghSubdir = decodeURIComponent\(ghMatch\[3\]\);/);
+    expect(BRIDGE_SRC).toMatch(/Invalid percent-encoding in source URL/);
+  });
+
+  // Re-implementation to exercise the decode+error path end-to-end.
+  function safeDecodeBranchAndSubdir(rawBranch, rawSubdir) {
+    try {
+      return { branch: decodeURIComponent(rawBranch), subdir: decodeURIComponent(rawSubdir) };
+    } catch {
+      throw new Error('Invalid percent-encoding in source URL');
+    }
+  }
+
+  test.each([
+    ['lone %', '%', 'apps/agent'],
+    ['%GG invalid hex', '%GG', 'apps/agent'],
+    ['truncated %A', '%A', 'apps/agent'],
+    ['malformed subdir', 'main', 'apps/%ZZ/evil'],
+  ])('rejects %s', (_desc, branch, subdir) => {
+    expect(() => safeDecodeBranchAndSubdir(branch, subdir))
+      .toThrow(/Invalid percent-encoding in source URL/);
+  });
+
+  test('accepts well-formed percent-encoding (feature%2Fbar)', () => {
+    const out = safeDecodeBranchAndSubdir('feature%2Fbar', 'apps/agent');
+    expect(out.branch).toBe('feature/bar');
+    expect(out.subdir).toBe('apps/agent');
+  });
+});
