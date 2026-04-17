@@ -354,6 +354,10 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// Cap per-connection idle time at 30s — slow-loris defense. Done24 endpoints
+// call the bot API (fast) or respond synchronously; 30s is well beyond the
+// p99 for any legitimate request.
+server.setTimeout(30_000);
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`[done24bot] Server listening on http://127.0.0.1:${PORT}`);
   const status = handleStatus();

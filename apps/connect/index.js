@@ -325,6 +325,9 @@ const server = http.createServer(async (req, res) => {
   res.end();
 });
 
+// Cap per-connection idle time at 30s — slow-loris defense. MCP JSON-RPC
+// calls return in milliseconds; idle sockets beyond this are broken/hostile.
+server.setTimeout(30_000);
 server.listen(PORT, '127.0.0.1', async () => {
   console.log(`[connect] MCP server listening on http://127.0.0.1:${PORT}`);
   console.log(`[connect] MCP auth: callers must send header 'X-MCP-Secret: <secret>'`);

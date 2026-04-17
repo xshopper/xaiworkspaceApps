@@ -204,7 +204,11 @@ const server = http.createServer(async (req, res) => {
         })),
       });
     } catch (err) {
-      json(res, 500, { ok: false, error: err.message });
+      // Do not leak err.message to the response — it includes filesystem
+      // paths and session-file fragments from the claude-agent-sdk. Log
+      // server-side; return a generic error to the caller.
+      console.error('[claude-code] listSessions error:', err.stack || err);
+      json(res, 500, { ok: false, error: 'Internal error' });
     }
     return;
   }
@@ -247,8 +251,9 @@ const server = http.createServer(async (req, res) => {
         const result = await runQuery(prompt.trim(), sessionId, effectiveCwd);
         json(res, 200, { ok: true, ...result });
       } catch (err) {
-        console.error('[claude-code] query error:', err.message);
-        json(res, 500, { ok: false, error: err.message });
+        // Generic response; full stack goes to server log only.
+        console.error('[claude-code] query error:', err.stack || err);
+        json(res, 500, { ok: false, error: 'Internal error' });
       }
       return;
     }
@@ -278,7 +283,8 @@ const server = http.createServer(async (req, res) => {
         const messages = await getSessionMessages(sessionId, { limit: limit ?? 50 });
         json(res, 200, { ok: true, messages });
       } catch (err) {
-        json(res, 500, { ok: false, error: err.message });
+        console.error('[claude-code] getSessionMessages error:', err.stack || err);
+        json(res, 500, { ok: false, error: 'Internal error' });
       }
       return;
     }
