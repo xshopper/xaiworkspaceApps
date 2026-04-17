@@ -14,7 +14,10 @@ jobs:
     # error. Keeps bad builds from reaching end users.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Pin actions/checkout to the current v4 SHA so a tag-overwrite attack
+      # on the action repository cannot swap in malicious checkout logic at
+      # release time. `# v4` comment preserves human-readability.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Validate all manifests (YAML parse + required fields)
         run: |
@@ -22,7 +25,12 @@ jobs:
           # Install a small YAML parser — pipx ensures it's isolated.
           python3 -m pip install --quiet pyyaml
           fail=0
-          for m in apps/*/manifest.yml; do
+          # Extended glob: validate manifests across ALL component kinds, not
+          # just apps/. Agents, skills, and tools all publish manifest.yml
+          # files; skipping them here meant a broken agent/skill manifest
+          # shipped straight to users.
+          shopt -s nullglob
+          for m in apps/*/manifest.yml agents/*/manifest.yml skills/*/manifest.yml tools/*/manifest.yml; do
             echo "Validating $m"
             python3 - <<PY || { echo "::error file=$m::manifest validation failed"; fail=1; }
           import sys, yaml
@@ -56,7 +64,10 @@ jobs:
     needs: validate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Pin actions/checkout to the current v4 SHA so a tag-overwrite attack
+      # on the action repository cannot swap in malicious checkout logic at
+      # release time. `# v4` comment preserves human-readability.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
 
