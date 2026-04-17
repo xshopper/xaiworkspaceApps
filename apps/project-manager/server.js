@@ -91,6 +91,12 @@ function json(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
+// Path-param matcher. Matches token-market's matchRoute semantics:
+// percent-decode each captured param so callers can use encoded IDs
+// (e.g. task%2F123 → task/123). `decodeURIComponent` throws URIError on a
+// malformed escape (bare `%`, `%GG`, truncated `%A`); callers guard the
+// whole handler by short-circuiting with a 400 before entering match() (see
+// isMalformedPath() + the top-of-handler check).
 function match(method, pathname, pattern) {
   if (method !== pattern.method) return null;
   const pParts = pattern.path.split('/');
@@ -98,10 +104,32 @@ function match(method, pathname, pattern) {
   if (pParts.length !== uParts.length) return null;
   const params = {};
   for (let i = 0; i < pParts.length; i++) {
-    if (pParts[i].startsWith(':')) params[pParts[i].slice(1)] = uParts[i];
-    else if (pParts[i] !== uParts[i]) return null;
+    if (pParts[i].startsWith(':')) {
+      // Safe-decode: the top-level handler validated `pathname` via
+      // isMalformedPath() and returned 400 before reaching here, so any
+      // residual URIError is impossible. The try/catch is belt + braces.
+      try {
+        params[pParts[i].slice(1)] = decodeURIComponent(uParts[i]);
+      } catch {
+        return null;
+      }
+    } else if (pParts[i] !== uParts[i]) {
+      return null;
+    }
   }
   return params;
+}
+
+// Short-circuit 400 check run once at the top of handler(). Returns true if
+// ANY segment in pathname is a malformed percent-escape. Cheap: one
+// decodeURIComponent call over the whole pathname.
+function isMalformedPath(pathname) {
+  try {
+    decodeURIComponent(pathname);
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 // ── MCP Tool dispatch ───────────────────────────────────────────────────
@@ -168,6 +196,15 @@ async function handler(req, res) {
     // Health
     if (method === 'GET' && pathname === '/health') {
       return json(res, 200, { status: 'ok', uptime: process.uptime() });
+    }
+
+    // Reject malformed percent-encoding up front — mirrors token-market.
+    // Without this the decodeURIComponent inside match() throws URIError for
+    // every /api/:param route (DELETE /api/tasks/%ZZ, GET /api/board/%), and
+    // our catch() would emit 500 for what is actually a caller bug. Callers
+    // that need literal `%` in IDs must percent-encode (`%25`).
+    if (isMalformedPath(pathname)) {
+      return json(res, 400, { error: 'Malformed path: invalid percent-encoding' });
     }
 
     // MCP tools
@@ -388,6 +425,10 @@ async function handler(req, res) {
 // ── Start ────────────────────────────────────────────────────────────────
 
 const server = http.createServer(handler);
+// Cap per-connection idle time at 30s to defeat slow-loris / stalled sockets.
+// All project-manager handlers are in-process SQLite queries that return in
+// milliseconds; any request holding the socket longer is malicious or broken.
+server.setTimeout(30_000);
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`[project-manager] listening on http://127.0.0.1:${PORT}`);
   console.log(`[project-manager] database: ${DB_PATH}`);
