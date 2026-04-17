@@ -8,7 +8,7 @@ fi
 
 # Build JSON safely using node
 DATA=$(node -e "process.stdout.write(JSON.stringify({url:process.argv[1]}))" -- "$1")
-RESULT=$(curl -s -X POST http://127.0.0.1:3470/api/browse \
+RESULT=$(curl -s -X POST http://127.0.0.1:3471/api/browse \
   -H 'Content-Type: application/json' \
   -d "$DATA" 2>/dev/null)
 

@@ -5,7 +5,10 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const PORT = parseInt(process.env.APP_PORT || '3470', 10);
+// Default port 3471 (changed from 3470 in review round 1 to avoid
+// collision with @connect's MCP transport, which also wants 3470 as a
+// singleton).
+const PORT = parseInt(process.env.APP_PORT || '3471', 10);
 const APP_BRIDGE_TOKEN = process.env.APP_BRIDGE_TOKEN || '';
 const APP_DIR = process.env.APP_DATA_DIR || path.dirname(process.argv[1]);
 const CONFIG_PATH = path.join(APP_DIR, 'config.json');
@@ -73,15 +76,47 @@ try {
 
 const API_KEY_REGEX = /^dk_[A-Za-z0-9_-]+$/;
 
+// Dedicated error class so the top-level HTTP error mapper can reliably
+// return 401 for "API key missing or invalid" without relying on substring
+// matching of `err.message`.
+class ApiKeyError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'ApiKeyError';
+    this.statusCode = 401;
+  }
+}
+
 function validateApiKey(key) {
-  if (!key || !API_KEY_REGEX.test(key)) {
-    throw new Error('Invalid API key format (expected dk_...)');
+  if (!key) {
+    throw new ApiKeyError('No API key configured — set one via @done24bot setkey <dk_...>');
+  }
+  if (!API_KEY_REGEX.test(key)) {
+    throw new ApiKeyError('Invalid API key format (expected dk_...)');
   }
   return key;
 }
 
 async function connectBrowser() {
   const apiKey = validateApiKey(getApiKey());
+  // NOTE on API key placement — review round 1 finding #9:
+  //
+  // The done24bot endpoint authenticates the WebSocket handshake via
+  // `?apiKey=<key>` in the query string. We would prefer to send it in an
+  // Authorization header, but puppeteer-core's `puppeteer.connect({
+  // browserWSEndpoint })` does not expose a way to set custom headers on
+  // the WebSocket upgrade — it accepts a URL only. done24bot.com controls
+  // the server side; supporting an `Authorization` header would require
+  // coordination with them.
+  //
+  // Mitigations until we can move off query-string auth:
+  //   - We never log `browserWSEndpoint` or the URL we build here.
+  //   - We deliberately don't honour HTTP_PROXY / HTTPS_PROXY for this
+  //     request: setting the two env vars for this connection is a known
+  //     leakage path (proxy access logs would capture the full URL).
+  //     puppeteer-core connects directly to the endpoint, bypassing any
+  //     process-level proxy config, so the key only appears on the TLS
+  //     wire to done24bot.com.
   const browser = await puppeteer.connect({
     browserWSEndpoint: `wss://w.done24bot.com?apiKey=${encodeURIComponent(apiKey)}`,
     defaultViewport: { width: 1280, height: 800 },
@@ -276,7 +311,9 @@ const server = http.createServer(async (req, res) => {
   } catch (err) {
     console.error(`[done24bot] ${req.method} ${url.pathname} error:`, err.message);
     const msg = err.message;
-    const status = msg.includes('No API key') ? 401
+    // ApiKeyError carries its own status code (401). Everything else gets
+    // classified by message pattern (400 for input validation, 500 otherwise).
+    const status = (err instanceof ApiKeyError) ? err.statusCode
       : (msg.includes('not allowed') || msg.includes('Invalid URL') || msg.includes('Invalid IP')) ? 400
       : 500;
     sendJson(res, { error: err.message }, status);
