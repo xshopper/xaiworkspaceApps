@@ -415,7 +415,11 @@ function handleConfigUpdate(msg) {
     if (changed) {
       fs.writeFileSync(OC_CONFIG_PATH, JSON.stringify(config, null, 2) + '\n');
       console.log('[workspace-agent] openclaw.json updated from config_update');
-      try { execSync('pm2 restart openclaw --no-color', { timeout: 10000 }); } catch {}
+      try {
+        execSync('pm2 restart openclaw --no-color', { timeout: 10000 });
+      } catch (e) {
+        console.error(`[workspace-agent] pm2 restart openclaw failed after config update: ${e.message}`);
+      }
     }
   } catch (err) {
     console.error(`[workspace-agent] Config update failed: ${err.message}`);
