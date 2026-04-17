@@ -8,7 +8,52 @@ permissions:
   contents: write
 
 jobs:
+  validate:
+    # Pre-release gate. Fails the run before any release is cut if any
+    # app's manifest.yml is malformed or any .js entry point has a syntax
+    # error. Keeps bad builds from reaching end users.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate all manifests (YAML parse + required fields)
+        run: |
+          set -euo pipefail
+          # Install a small YAML parser — pipx ensures it's isolated.
+          python3 -m pip install --quiet pyyaml
+          fail=0
+          for m in apps/*/manifest.yml; do
+            echo "Validating $m"
+            python3 - <<PY || { echo "::error file=$m::manifest validation failed"; fail=1; }
+          import sys, yaml
+          with open("$m") as f:
+              try:
+                  data = yaml.safe_load(f)
+              except yaml.YAMLError as e:
+                  sys.exit(f"YAML parse error: {e}")
+          if not isinstance(data, dict):
+              sys.exit("Top-level must be a mapping")
+          for field in ("slug", "identifier", "name", "version"):
+              if field not in data:
+                  sys.exit(f"Missing required field: {field}")
+          PY
+          done
+          if [ "$fail" -ne 0 ]; then exit 1; fi
+
+      - name: Syntax-check all JS entry points
+        run: |
+          set -euo pipefail
+          fail=0
+          # node --check statically parses the file without executing it.
+          # Covers both ESM and CJS.
+          while IFS= read -r f; do
+            echo "node --check $f"
+            node --check "$f" || { echo "::error file=$f::syntax error"; fail=1; }
+          done < <(find apps -maxdepth 3 -type f \( -name 'index.js' -o -name 'server.js' -o -name 'bridge.js' \))
+          if [ "$fail" -ne 0 ]; then exit 1; fi
+
   release:
+    needs: validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
