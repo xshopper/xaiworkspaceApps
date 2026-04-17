@@ -165,7 +165,7 @@ help: |
     `@project-manager velocity` — show velocity trend across sprints
     `@project-manager search "auth"` — find tasks by keyword
 
-startup: "cd ~/apps/com.xaiworkspace.project-manager && node server.js"
+startup: "node server.js"
 cleanup: "pm2 delete project-manager-server 2>/dev/null || pkill -u \"$(id -u)\" -f 'project-manager/server.js' 2>/dev/null || true"
 
 port: 3462

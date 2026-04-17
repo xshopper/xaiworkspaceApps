@@ -82,7 +82,7 @@ help: |
     `@token-market uninstall`             — uninstall Token Market
 
 configurable: true
-startup: "cd ~/apps/com.xshopper.token-market && node server.js"
+startup: "node server.js"
 cleanup: "pm2 delete token-market-server 2>/dev/null || pkill -u \"$(id -u)\" -f 'token-market/server.js' 2>/dev/null || true"
 
 port: 3460

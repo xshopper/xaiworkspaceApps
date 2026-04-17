@@ -81,7 +81,7 @@ help: |
     ANTHROPIC_API_KEY environment variable set in the container.
 
 configurable: true
-startup: "cd ~/apps/com.xshopper.claude-code && bash scripts/start.sh"
+startup: "scripts/start.sh"
 cleanup: "pm2 delete claude-code-server 2>/dev/null || true"
 
 model: claude-sonnet-4-6

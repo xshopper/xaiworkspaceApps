@@ -175,13 +175,21 @@ if (fs.existsSync(appsDir)) {
       console.error("WARNING: Skipping app-" + slug + " — startup contains control characters");
       continue;
     }
-    // Block standalone `&` (background operator) but allow `&&`
-    // (command chaining). First-party apps commonly use
-    // `cd ~/apps/... && node ...`. Negative-lookbehind/lookahead
-    // matches only `&` that is neither preceded nor followed by
-    // another `&`. `FORBIDDEN_STARTUP_CHARS` still blocks `|`, `;`,
-    // backtick, `$`, `{}`, so `&&` cannot be combined with other
-    // metacharacters to branch into unrelated binaries.
+    // Block standalone `&` (background operator) but allow the exact
+    // two-character `&&` (command chaining). First-party apps commonly use
+    // `cd ~/apps/... && node ...`. `FORBIDDEN_STARTUP_CHARS` still blocks
+    // `|`, `;`, backtick, `$`, `{}`, so `&&` cannot be combined with
+    // other metacharacters to branch into unrelated binaries.
+    //
+    // Two-stage check:
+    //   1. Reject `&&&+` — negative-lookbehind alone skips this because
+    //      every `&` in a run of 3+ has a neighbour on one side. We need
+    //      an explicit triple-or-more rejection.
+    //   2. Reject lone `&` (not part of a `&&` pair).
+    if (/&{3,}/.test(startup)) {
+      console.error("WARNING: Skipping app-" + slug + " — startup contains run of 3+ '&' (only exact && is permitted)");
+      continue;
+    }
     if (/(?<!&)&(?!&)/.test(startup)) {
       console.error("WARNING: Skipping app-" + slug + " — startup contains lone & (background operator)");
       continue;
