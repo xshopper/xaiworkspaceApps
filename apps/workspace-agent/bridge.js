@@ -637,7 +637,13 @@ function reportInstalledApps() {
 const TRUSTED_DOMAINS = new Set([
   'github.com',
   'api.github.com',
-  'codeload.github.com',
+  // `codeload.github.com` was historically the zip/tarball host for
+  // /archive/ and /legacy.zip URLs, but GitHub now redirects those
+  // requests to `objects.githubusercontent.com` (an S3-backed bucket).
+  // Keeping codeload in the allowlist does nothing useful and keeps a
+  // name in the list that future engineers might rely on for redirects
+  // that no longer happen. Remove it to match reality.
+  'objects.githubusercontent.com',
   'raw.githubusercontent.com',
   'registry.npmjs.org',
   'xaiworkspace.com',
@@ -828,22 +834,78 @@ async function handleInstallApp(msg) {
       await execFileAsync('cp', ['-a', src + '/.', appDir + '/'], { timeout: 15000 });
       await execFileAsync('rm', ['-rf', tmpFile, tmpDir], { timeout: 5000 }).catch(() => {});
     } else if (sourceUrl) {
+      // NOTE on integrity: unlike artifactUrl installs (which require a
+      // mandatory sha256 digest), `sourceUrl` git clones currently verify
+      // only the transport (HTTPS + allowlisted host). A remote that we
+      // trust today could be tampered with or repo-renamed tomorrow; for
+      // strong supply-chain integrity, callers should pin a commit SHA in
+      // the URL (e.g. `tree/<sha>/...`). Mutable refs like `HEAD` or a
+      // branch name are accepted but logged so operators can audit them.
       const ghMatch = sourceUrl.match(/^(https:\/\/github\.com\/[^/]+\/[^/]+)\/tree\/([^/]+)\/(.+)$/);
       if (ghMatch) {
         const repoUrl = ghMatch[1] + '.git';
+        const branchOrRef = ghMatch[2];
         const ghSubdir = ghMatch[3];
         if (!/^[a-zA-Z0-9._/-]+$/.test(ghSubdir)) {
           throw new Error('Invalid source subdir path');
         }
+        if (!/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(branchOrRef)) {
+          throw new Error('Invalid source branch/ref');
+        }
+        if (!/^[a-f0-9]{40}$/i.test(branchOrRef)) {
+          console.warn(`[workspace-agent] Source install for ${slug} uses mutable ref "${branchOrRef}" — pin a 40-char commit SHA for integrity`);
+        }
         const tmpSparse = `/tmp/sparse-${slug}-${safeIdSuffix}`;
         await execFileAsync('rm', ['-rf', tmpSparse], { timeout: 5000 }).catch(() => {});
-        await execFileAsync('git', ['clone', '--depth', '1', '--filter=blob:none', '--sparse', repoUrl, tmpSparse], { timeout: 120000 });
+        // Pass --branch so we clone the exact ref the caller pinned; without
+        // this we silently install whatever the default branch points at,
+        // which is a correctness + supply-chain bug.
+        await execFileAsync('git', ['clone', '--depth', '1', '--filter=blob:none', '--sparse', '--branch', branchOrRef, repoUrl, tmpSparse], { timeout: 120000 });
         await execFileAsync('git', ['-C', tmpSparse, 'sparse-checkout', 'set', ghSubdir], { timeout: 30000 });
         await execFileAsync('cp', ['-a', path.join(tmpSparse, ghSubdir) + '/.', appDir + '/'], { timeout: 15000 });
         await execFileAsync('rm', ['-rf', tmpSparse], { timeout: 5000 }).catch(() => {});
       } else {
-        await execFileAsync('git', ['clone', '--depth', '1', sourceUrl, appDir], { timeout: 120000 });
+        // Whole-repo clone fallback. Pin to the optional `?ref=<branch|sha>`
+        // query param if present, otherwise fall back to the repo default
+        // and log a warning (same rationale as the tree-URL case above).
+        let branchRef = null;
+        try {
+          const u = new URL(sourceUrl);
+          branchRef = u.searchParams.get('ref');
+          if (branchRef && !/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(branchRef)) {
+            throw new Error('Invalid ?ref= value');
+          }
+        } catch { /* non-URL sourceUrl already rejected by allowlist */ }
+        const cloneArgs = ['clone', '--depth', '1'];
+        if (branchRef) {
+          cloneArgs.push('--branch', branchRef);
+          if (!/^[a-f0-9]{40}$/i.test(branchRef)) {
+            console.warn(`[workspace-agent] Source install for ${slug} uses mutable ref "${branchRef}" — pin a 40-char commit SHA for integrity`);
+          }
+        } else {
+          console.warn(`[workspace-agent] Source install for ${slug} did not pin a branch/sha — using repo default (mutable)`);
+        }
+        // Strip the query string before handing to git (we consumed it above).
+        const cloneUrl = sourceUrl.split('?')[0];
+        cloneArgs.push(cloneUrl, appDir);
+        await execFileAsync('git', cloneArgs, { timeout: 120000 });
       }
+    }
+
+    // Reject no-op installs: if neither artifactUrl nor sourceUrl was
+    // provided, `appDir` is either empty or contains only the .env-keys we
+    // just wrote. Previously this fell through silently — the app appeared
+    // to "install" but had no code, and pm2 would fail to spawn it with a
+    // useless "cannot find module" error. Fail fast here with a clear
+    // message so operators see the real cause.
+    const installedEntries = (() => {
+      try { return fs.readdirSync(appDir).filter(f => f !== '.env-keys'); }
+      catch { return []; }
+    })();
+    if (!artifactUrl && !sourceUrl && installedEntries.length === 0) {
+      send({ type: 'install_result', id, slug, name: instName, status: 'error', error: 'Install source missing: neither artifactUrl nor sourceUrl was provided' });
+      _installingApps.delete(installKey);
+      return;
     }
 
     // 3. Run install.sh if present
