@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 APP_DIR=~/apps/com.done24bot.browser
 cd "$APP_DIR"
@@ -18,7 +18,7 @@ fi
 mkdir -p screenshots
 
 # Save API key from install parameters if provided
-if [ -n "$APP_PARAMETERS" ]; then
+if [ -n "${APP_PARAMETERS:-}" ]; then
   API_KEY=$(echo "$APP_PARAMETERS" | node -e "try{const p=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));if(p.apiKey)console.log(p.apiKey)}catch{}")
   if [ -n "$API_KEY" ]; then
     node -e "

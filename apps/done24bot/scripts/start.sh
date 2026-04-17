@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 APP_DIR="${HOME}/apps/com.done24bot.browser"
 cd "$APP_DIR"

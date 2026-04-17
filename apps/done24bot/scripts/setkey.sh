@@ -1,6 +1,7 @@
 #!/bin/bash
+set -euo pipefail
 
-if [ -z "$1" ]; then
+if [ -z "${1:-}" ]; then
   echo "Usage: bash scripts/setkey.sh <api-key>"
   echo ""
   echo "Get your API key at: https://done24bot.com/api-keys"
@@ -11,9 +12,9 @@ fi
 DATA=$(node -e "process.stdout.write(JSON.stringify({apiKey:process.argv[1]}))" -- "$1")
 RESULT=$(curl -s -X POST http://127.0.0.1:3471/api/config \
   -H 'Content-Type: application/json' \
-  -d "$DATA" 2>/dev/null)
+  -d "$DATA" 2>/dev/null || true)
 
-if [ $? -ne 0 ] || [ -z "$RESULT" ]; then
+if [ -z "$RESULT" ]; then
   # Server not running — write config directly using process.argv (no shell interpolation)
   node -e "
     const fs = require('fs'), path = require('path');
