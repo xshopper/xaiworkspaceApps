@@ -134,10 +134,12 @@ apps.push(
 // a space. After the prefix we still reject shell metacharacters that would
 // let the command branch into unrelated binaries (backtick, dollar-paren,
 // pipes, semicolons, redirection, comment markers).
+// `bash `/`sh ` are intentionally excluded — they would let
+// `bash evil.sh` pass the prefix allowlist. First-party apps use
+// node/pnpm/npm; path-resolution below still accepts direct shell
+// scripts that live under the apps directory (e.g. `./run.sh`).
 const ALLOWED_STARTUP_PREFIXES = [
   "node ",
-  "bash ",
-  "sh ",
   "python3 ",
   "pnpm ",
   "npm ",
@@ -173,11 +175,15 @@ if (fs.existsSync(appsDir)) {
       console.error("WARNING: Skipping app-" + slug + " — startup contains control characters");
       continue;
     }
-    // Block standalone & (background operator). `&&` chaining is also
-    // disallowed by the forbidden-chars check below (we require a single
-    // command, not chains).
-    if (/&/.test(startup)) {
-      console.error("WARNING: Skipping app-" + slug + " — startup contains & (background / chaining)");
+    // Block standalone `&` (background operator) but allow `&&`
+    // (command chaining). First-party apps commonly use
+    // `cd ~/apps/... && node ...`. Negative-lookbehind/lookahead
+    // matches only `&` that is neither preceded nor followed by
+    // another `&`. `FORBIDDEN_STARTUP_CHARS` still blocks `|`, `;`,
+    // backtick, `$`, `{}`, so `&&` cannot be combined with other
+    // metacharacters to branch into unrelated binaries.
+    if (/(?<!&)&(?!&)/.test(startup)) {
+      console.error("WARNING: Skipping app-" + slug + " — startup contains lone & (background operator)");
       continue;
     }
     if (FORBIDDEN_STARTUP_CHARS.test(startup)) {
