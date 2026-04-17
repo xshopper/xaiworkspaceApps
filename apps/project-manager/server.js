@@ -36,9 +36,15 @@ const MAX_BODY = 1024 * 1024; // 1 MB
 const VALID_STATUSES = new Set(['backlog', 'todo', 'in_progress', 'review', 'done']);
 const VALID_PRIORITIES = new Set(['P0', 'P1', 'P2', 'P3']);
 
-/** Returns true if auth passes; sends 401 and returns false otherwise. */
+/**
+ * Returns true if auth passes; sends 401 and returns false otherwise.
+ *
+ * Fails CLOSED when BRIDGE_TOKEN env is unset — previously this was
+ * `if (TOKEN && ...)` which short-circuited and let every caller through
+ * when the bridge forgot to inject the token. Matches claude-code.
+ */
 function authenticate(req, res) {
-  if (BRIDGE_TOKEN && req.headers['x-app-bridge-token'] !== BRIDGE_TOKEN) {
+  if (!BRIDGE_TOKEN || req.headers['x-app-bridge-token'] !== BRIDGE_TOKEN) {
     json(res, 401, { error: 'Unauthorized' });
     return false;
   }
@@ -385,6 +391,12 @@ const server = http.createServer(handler);
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`[project-manager] listening on http://127.0.0.1:${PORT}`);
   console.log(`[project-manager] database: ${DB_PATH}`);
+  if (!BRIDGE_TOKEN) {
+    console.warn(
+      '[project-manager] WARNING: APP_BRIDGE_TOKEN is not set. All authenticated endpoints will return 401. ' +
+      'This is the fail-closed default; set APP_BRIDGE_TOKEN via the bridge to enable API access.'
+    );
+  }
 });
 
 // ── Graceful shutdown ───────────────────────────────────────────────────

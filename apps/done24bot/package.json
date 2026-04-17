@@ -1,0 +1,16 @@
+{
+  "name": "@xaiworkspace/done24bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Done24Bot browser automation — Puppeteer over WSS to done24bot.com",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "puppeteer-core": "^23.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

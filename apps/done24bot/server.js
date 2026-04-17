@@ -275,14 +275,42 @@ function sendJson(res, data, status = 200) {
   res.end(body);
 }
 
+// CORS allowlist — matches project-manager/token-market. A wildcard `*`
+// would let any site on the internet fire no-credentials fetches against
+// the API. APP_BRIDGE_TOKEN auth prevents reads, but a wildcard is still
+// an information leak (404 vs 200 patterns, timing) and signals to
+// operators that we don't care about browser boundaries.
+const ALLOWED_ORIGINS = [
+  /^https:\/\/([a-z0-9-]+\.)?xaiworkspace\.com$/i,
+  /^https:\/\/([a-z0-9-]+\.)?xshopper\.com$/i,
+  /^http:\/\/localhost(:\d+)?$/,
+  /^http:\/\/127\.0\.0\.1(:\d+)?$/,
+];
+
+function pickAllowedOrigin(origin) {
+  if (!origin) return null;
+  return ALLOWED_ORIGINS.some((re) => re.test(origin)) ? origin : null;
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
 
-  // CORS for sandbox
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-App-Bridge-Token');
-  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+  // CORS — reflect allowlisted origins only. `Vary: Origin` tells caches
+  // the response depends on the request Origin header.
+  const allowedOrigin = pickAllowedOrigin(req.headers.origin);
+  if (allowedOrigin) {
+    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-App-Bridge-Token');
+  }
+  if (req.method === 'OPTIONS') {
+    // Deny preflight from origins not in the allowlist — reflecting an
+    // arbitrary Origin would defeat the allowlist.
+    res.writeHead(allowedOrigin ? 204 : 403);
+    res.end();
+    return;
+  }
 
   try {
     // /api/status is the health endpoint — no auth required
@@ -290,8 +318,11 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, handleStatus());
     }
 
-    // All other endpoints require APP_BRIDGE_TOKEN auth
-    if (APP_BRIDGE_TOKEN && req.headers['x-app-bridge-token'] !== APP_BRIDGE_TOKEN) {
+    // All other endpoints require APP_BRIDGE_TOKEN auth. Fail CLOSED when
+    // the token env var is unset — previously this was `if (TOKEN && ...)`
+    // which short-circuited and admitted every caller when the bridge
+    // forgot to inject the token. Matches claude-code/server.js.
+    if (!APP_BRIDGE_TOKEN || req.headers['x-app-bridge-token'] !== APP_BRIDGE_TOKEN) {
       return sendJson(res, { error: 'Unauthorized' }, 401);
     }
 
@@ -324,4 +355,30 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(`[done24bot] Server listening on http://127.0.0.1:${PORT}`);
   const status = handleStatus();
   console.log(`[done24bot] API key: ${status.hasApiKey ? status.keyPreview : 'NOT SET'}`);
+  if (!APP_BRIDGE_TOKEN) {
+    console.warn(
+      '[done24bot] WARNING: APP_BRIDGE_TOKEN is not set. All authenticated endpoints will return 401. ' +
+      'This is the fail-closed default; set APP_BRIDGE_TOKEN via the bridge to enable API access.'
+    );
+  }
 });
+
+// ── Graceful shutdown ───────────────────────────────────────────────────
+//
+// Puppeteer browsers are opened + disconnected per-request (see withPage)
+// so there is no long-lived browser to close here. We just drain the HTTP
+// server so pm2/SIGTERM can stop us cleanly instead of being SIGKILLed.
+let _shuttingDown = false;
+function shutdown(signal) {
+  if (_shuttingDown) return;
+  _shuttingDown = true;
+  console.log(`[done24bot] ${signal} — shutting down`);
+  try {
+    if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+  } catch { /* ignore */ }
+  server.close(() => { process.exit(0); });
+  // Hard deadline in case an in-flight puppeteer connection refuses to settle.
+  setTimeout(() => process.exit(0), 4000).unref();
+}
+process.on('SIGINT',  () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
