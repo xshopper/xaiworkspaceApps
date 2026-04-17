@@ -10,6 +10,26 @@ const BRIDGE_TOKEN = process.env.APP_BRIDGE_TOKEN || '';
 
 db.init(DB_PATH);
 
+// ── CORS ─────────────────────────────────────────────────────────────────
+//
+// Restrict CORS to known bridge/iframe origins. A wildcard `*` would let
+// any site on the internet fire no-credentials fetches against the API;
+// while APP_BRIDGE_TOKEN auth prevents reads, a wildcard is still an
+// information leak (404 vs 200 patterns, etc.) and signals to operators
+// that we don't care about browser boundaries. Matches the token-market
+// allowlist pattern.
+const ALLOWED_ORIGINS = [
+  /^https:\/\/([a-z0-9-]+\.)?xaiworkspace\.com$/i,
+  /^https:\/\/([a-z0-9-]+\.)?xshopper\.com$/i,
+  /^http:\/\/localhost(:\d+)?$/,
+  /^http:\/\/127\.0\.0\.1(:\d+)?$/,
+];
+
+function pickAllowedOrigin(origin) {
+  if (!origin) return null;
+  return ALLOWED_ORIGINS.some((re) => re.test(origin)) ? origin : null;
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 const MAX_BODY = 1024 * 1024; // 1 MB
@@ -23,6 +43,19 @@ function authenticate(req, res) {
     return false;
   }
   return true;
+}
+
+/** Apply CORS headers to the response based on the request's Origin. */
+function applyCors(req, res) {
+  const origin = req.headers.origin;
+  const allowed = pickAllowedOrigin(origin);
+  if (allowed) {
+    res.setHeader('Access-Control-Allow-Origin', allowed);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-app-bridge-token');
+  }
+  return !!allowed;
 }
 
 function readBody(req) {
@@ -45,12 +78,10 @@ async function jsonBody(req) {
 }
 
 function json(res, status, data) {
-  res.writeHead(status, {
-    'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-app-bridge-token',
-  });
+  // CORS headers are applied up-front by applyCors() during the request;
+  // here we only set Content-Type (writeHead merges with previously-set
+  // headers via setHeader).
+  res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(data));
 }
 
@@ -117,12 +148,12 @@ async function handler(req, res) {
   const { pathname } = url;
   const method = req.method;
 
+  const allowedOrigin = applyCors(req, res);
+
   if (method === 'OPTIONS') {
-    res.writeHead(204, {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-app-bridge-token',
-    });
+    // Deny preflight from origins not in the allowlist — reflecting an
+    // arbitrary Origin back would defeat the allowlist.
+    res.writeHead(allowedOrigin ? 204 : 403);
     res.end();
     return;
   }
@@ -355,3 +386,28 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(`[project-manager] listening on http://127.0.0.1:${PORT}`);
   console.log(`[project-manager] database: ${DB_PATH}`);
 });
+
+// ── Graceful shutdown ───────────────────────────────────────────────────
+//
+// Close the SQLite database (better-sqlite3 keeps a file handle open and
+// the WAL file will not be checkpointed unless we close cleanly) and
+// shut down the HTTP server before pm2 SIGKILLs us.
+let _shuttingDown = false;
+function shutdown(signal) {
+  if (_shuttingDown) return;
+  _shuttingDown = true;
+  console.log(`[project-manager] ${signal} — shutting down`);
+  try {
+    if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+  } catch { /* ignore */ }
+  server.close(() => {
+    try { db.close(); } catch (err) { console.warn('[project-manager] db.close error:', err.message); }
+    process.exit(0);
+  });
+  setTimeout(() => {
+    try { db.close(); } catch { /* ignore */ }
+    process.exit(0);
+  }, 4000).unref();
+}
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));

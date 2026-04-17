@@ -31,6 +31,12 @@ function escapeLike(s) {
   return s.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
 }
 
+export function close() {
+  if (!db) return;
+  try { db.close(); } catch { /* already closed */ }
+  db = undefined;
+}
+
 export function init(dbPath) {
   mkdirSync(dirname(dbPath), { recursive: true });
   db = new Database(dbPath);
