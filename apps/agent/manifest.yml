@@ -13,7 +13,7 @@ parameters:
     label: Agent Persona
     type: select
     required: true
-    options:
+    enum:
       - { value: "pm", label: "Project Manager" }
       - { value: "developer", label: "Senior Developer" }
       - { value: "tester", label: "QA Tester" }
@@ -22,7 +22,7 @@ parameters:
     label: Default Model
     type: select
     default: "claude-sonnet-4-6"
-    options:
+    enum:
       - { value: "claude-haiku-4-5-20251001", label: "Haiku (Fast)" }
       - { value: "claude-sonnet-4-6", label: "Sonnet (Balanced)" }
       - { value: "claude-opus-4-6", label: "Opus (Best)" }

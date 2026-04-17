@@ -13,6 +13,7 @@ import { query, listSessions, getSessionMessages } from '@anthropic-ai/claude-ag
 
 const PORT = parseInt(process.env.APP_PORT ?? '3457', 10);
 const CWD = process.env.CLAUDE_CODE_CWD ?? process.env.HOME ?? '/root';
+const BRIDGE_TOKEN = process.env.APP_BRIDGE_TOKEN ?? '';
 
 // ---------------------------------------------------------------------------
 // Globals
@@ -118,7 +119,6 @@ function json(res, status, data) {
   res.writeHead(status, {
     'Content-Type': 'application/json',
     'Content-Length': Buffer.byteLength(body),
-    'Access-Control-Allow-Origin': '*',
   });
   res.end(body);
 }
@@ -128,13 +128,9 @@ function json(res, status, data) {
 // ---------------------------------------------------------------------------
 
 const server = http.createServer(async (req, res) => {
-  // CORS preflight
+  // CORS preflight — not needed (server binds 127.0.0.1, bridge calls are same-origin)
   if (req.method === 'OPTIONS') {
-    res.writeHead(204, {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
-    });
+    res.writeHead(204);
     res.end();
     return;
   }
@@ -175,9 +171,13 @@ const server = http.createServer(async (req, res) => {
   }
 
   // -----------------------------------------------------------------------
-  // POST endpoints
+  // POST endpoints — require bridge token
   // -----------------------------------------------------------------------
   if (req.method === 'POST') {
+    if (!BRIDGE_TOKEN || req.headers['x-app-bridge-token'] !== BRIDGE_TOKEN) {
+      json(res, 401, { ok: false, error: 'Unauthorized' });
+      return;
+    }
     const body = await readBody(req);
 
     // POST /query — run a Claude Code prompt

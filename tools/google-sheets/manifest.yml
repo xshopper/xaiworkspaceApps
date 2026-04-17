@@ -29,10 +29,14 @@ operations:
     description: Write data to a spreadsheet range
     method: PUT
     path: /spreadsheets/{spreadsheetId}/values/{range}
+    query:
+      valueInputOption: "USER_ENTERED"
   - name: append
     description: Append rows to a spreadsheet
     method: POST
     path: /spreadsheets/{spreadsheetId}/values/{range}:append
+    query:
+      valueInputOption: "USER_ENTERED"
   - name: create
     description: Create a new spreadsheet
     method: POST
@@ -42,11 +46,10 @@ operations:
     method: POST
     path: /spreadsheets/{spreadsheetId}/values/{range}:clear
   - name: batch-get
-    description: Read multiple ranges from a spreadsheet in one request
+    description: Read multiple ranges from a spreadsheet in one request (ranges query param required, e.g. ?ranges=Sheet1!A1:B2&ranges=Sheet2!A1:C5)
     method: GET
     path: /spreadsheets/{spreadsheetId}/values:batchGet
 
-permissions:
-  integrations: [google]
+permissions: {}
 
 sandbox: strict

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-APP_DIR=~/apps/com.done24bot.browser
+APP_DIR="${HOME}/apps/com.done24bot.browser"
 cd "$APP_DIR"
 
 # Install if needed

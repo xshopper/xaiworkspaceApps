@@ -72,9 +72,10 @@ const OC_CONFIG_PATH = path.join(HOME, '.openclaw', 'openclaw.json');
 
 // ── Input validation patterns ───────────────────────────────────────────────
 
-const SAFE_SLUG       = /^[a-z0-9][a-z0-9._-]*$/;
-const SAFE_IDENTIFIER = /^[a-zA-Z0-9._-]+$/;
-const VALID_ENV_KEY   = /^[A-Z_][A-Z0-9_]*$/;
+const SAFE_SLUG         = /^[a-z0-9][a-z0-9._-]*$/;
+const SAFE_IDENTIFIER   = /^[a-zA-Z0-9._-]+$/;
+const VALID_ENV_KEY     = /^[A-Z_][A-Z0-9_]*$/;
+const SAFE_PROCESS_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/;
 
 if (!INSTANCE_ID || !INSTANCE_TOKEN) {
   console.error('[workspace-agent] INSTANCE_ID and INSTANCE_TOKEN are required');
@@ -1115,10 +1116,14 @@ async function handleStopAppInstance(msg) {
   }
   // Prefer the router-supplied processName (defense-in-depth: router already
   // computes it via the same `${slug}--${name}` convention), fall back to
-  // recomputing if absent.
+  // recomputing if absent. Validate to prevent targeting arbitrary pm2 processes.
   const processName = typeof msg.processName === 'string' && msg.processName
     ? msg.processName
     : ((!name || name === 'default') ? slug : `${slug}--${name}`);
+  if (!SAFE_PROCESS_NAME.test(processName)) {
+    send({ type: 'stop_app_instance_result', slug, name, status: 'error', error: 'Invalid processName' });
+    return;
+  }
 
   try {
     await execFileAsync('pm2', ['stop', processName], { timeout: 10000 });
@@ -1151,6 +1156,10 @@ async function handleStartAppInstance(msg) {
   const processName = typeof msg.processName === 'string' && msg.processName
     ? msg.processName
     : ((!name || name === 'default') ? slug : `${slug}--${name}`);
+  if (!SAFE_PROCESS_NAME.test(processName)) {
+    send({ type: 'start_app_instance_result', slug, name, status: 'error', error: 'Invalid processName' });
+    return;
+  }
 
   try {
     // pm2 start on an existing stopped process brings it back online.

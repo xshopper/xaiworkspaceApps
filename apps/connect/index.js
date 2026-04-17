@@ -44,12 +44,14 @@ const PKG_VERSION = (() => {
 
 const APP_SLUG = 'connect';
 const PORT = parseInt(process.env.APP_PORT || '3470', 10);
-const ROUTER_URL = (process.env.ROUTER_URL || 'https://router.xaiworkspace.com').replace(/\/$/, '');
+const ROUTER_URL = (process.env.ROUTER_URL || process.env.BRIDGE_URL || '').replace(/\/$/, '');
 const API_KEY = process.env.ANTHROPIC_API_KEY || '';
 
+if (!ROUTER_URL) {
+  console.warn('[connect] WARNING: Neither ROUTER_URL nor BRIDGE_URL is set — router calls will fail. Set ROUTER_URL to the router base URL (e.g. https://router.xaiworkspace.com)');
+}
 if (!API_KEY) {
-  console.error('[connect] ANTHROPIC_API_KEY is required (mini-app credentials missing)');
-  process.exit(1);
+  console.warn('[connect] WARNING: ANTHROPIC_API_KEY is not set — router calls will fail. This env var should be provided by the bridge as the mini-app LiteLLM virtual key.');
 }
 
 const FETCH_TIMEOUT_MS = 10_000;
@@ -92,6 +94,8 @@ function checkMcpAuth(req) {
 // ─── Router HTTP client ─────────────────────────────────────────────────────
 
 async function routerFetch(method, path, body) {
+  if (!ROUTER_URL) throw new Error('ROUTER_URL is not configured — cannot reach router');
+  if (!API_KEY) throw new Error('ANTHROPIC_API_KEY is not configured — cannot authenticate to router');
   const url = `${ROUTER_URL}${path}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);

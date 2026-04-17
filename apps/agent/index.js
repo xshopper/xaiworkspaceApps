@@ -42,6 +42,7 @@ const BRIDGE_URL = (() => {
     return url;
   } catch { return 'http://127.0.0.1:19099'; }
 })();
+const BRIDGE_TOKEN = process.env.APP_BRIDGE_TOKEN || '';
 const CWD = process.env.AGENT_CWD || process.env.HOME || '/root';
 
 // ── Address (Sprint 2 track C) ──────────────────────────────────────────────
@@ -116,6 +117,7 @@ bridge's agent-message endpoint:
 
 curl -s -X POST ${BRIDGE_URL}/api/agent-message \\
   -H 'Content-Type: application/json' \\
+  -H 'X-App-Bridge-Token: ${BRIDGE_TOKEN}' \\
   -d '{"from":"${OWN_ADDRESS}","to":"DOMAIN/WORKER_ID/com.xaiworkspace.agent/TARGET_NAME","message":"YOUR_MESSAGE"}'
 
 Your address is ${OWN_ADDRESS} — always pass it as the 'from' field.
@@ -241,7 +243,10 @@ async function sendToBridge(payload) {
   try {
     await fetch(`${BRIDGE_URL}/api/agent-response`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(BRIDGE_TOKEN && { 'X-App-Bridge-Token': BRIDGE_TOKEN }),
+      },
       body: JSON.stringify(payload),
     });
   } catch (err) {

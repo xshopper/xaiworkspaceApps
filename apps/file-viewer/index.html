@@ -784,12 +784,14 @@ function renderMarkdown(text) {
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\[(.+?)\]\((.+?)\)/g, (_, text, url) => {
-      const safe = /^(https?:\/\/|#)/.test(url);
-      return safe ? `<a href="${url}" target="_blank" rel="noopener">${text}</a>` : `[${text}](${url})`;
+      if (/^(javascript|data):/i.test(url)) return `[${escHtml(text)}](${escHtml(url)})`;
+      const safe = /^(https?:\/\/|#|[^:]+$)/.test(url);
+      return safe ? `<a href="${escHtml(url)}" target="_blank" rel="noopener">${escHtml(text)}</a>` : `[${escHtml(text)}](${escHtml(url)})`;
     })
     .replace(/!\[(.+?)\]\((.+?)\)/g, (_, alt, url) => {
+      if (/^javascript:/i.test(url)) return `![${escHtml(alt)}](${escHtml(url)})`;
       const safe = /^(https?:\/\/|data:image\/)/.test(url);
-      return safe ? `<img src="${url}" alt="${alt}">` : `![${alt}](${url})`;
+      return safe ? `<img src="${escHtml(url)}" alt="${escHtml(alt)}">` : `![${escHtml(alt)}](${escHtml(url)})`;
     })
     .replace(/^&gt;\s+(.+)$/gm, '<blockquote>$1</blockquote>')
     .replace(/^[-*]\s+(.+)$/gm, '<li class="ul">$1</li>')

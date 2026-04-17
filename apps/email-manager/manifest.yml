@@ -45,7 +45,6 @@ persona:
 permissions:
   resources: [email, storage]
   chat: [chat.send, chat.listen]
-  integrations: [google]
 
 triggers:
   - kind: cron

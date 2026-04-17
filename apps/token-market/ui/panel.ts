@@ -57,6 +57,16 @@ const state: PanelState = {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
+/** Escape HTML special characters to prevent XSS when inserting into innerHTML. */
+function esc(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function showSuccess(msg: string) {
   state.success = msg;
   setTimeout(() => { state.success = null; render(); }, 3000);
@@ -293,11 +303,11 @@ function renderBrowseTab(): string {
       cards += `
         <div class="card">
           <div class="card-header">
-            <strong>${l.display_name ?? l.model_id}</strong>
+            <strong>${esc(l.display_name ?? l.model_id)}</strong>
             ${healthBadge(l.health_state)}
           </div>
           <div class="card-meta">
-            Provider: ${l.provider} &middot; Seller: ${shortId(l.seller_id)}
+            Provider: ${esc(l.provider)} &middot; Seller: ${esc(shortId(l.seller_id))}
           </div>
           <div class="card-pricing">
             Input: <b>$${l.base_price_input_per_mtok?.toFixed(2) ?? '?'}</b>/MTok
@@ -305,8 +315,8 @@ function renderBrowseTab(): string {
           </div>
           <div class="card-actions">
             ${isSubscribed
-              ? `<button class="btn btn-danger btn-sm" data-action="unsubscribe" data-id="${sub!.id}">Unsubscribe</button>`
-              : `<button class="btn btn-primary btn-sm" data-action="subscribe" data-id="${l.id}">Subscribe</button>`
+              ? `<button class="btn btn-danger btn-sm" data-action="unsubscribe" data-id="${esc(sub!.id)}">Unsubscribe</button>`
+              : `<button class="btn btn-primary btn-sm" data-action="subscribe" data-id="${esc(l.id)}">Subscribe</button>`
             }
           </div>
         </div>`;
@@ -315,7 +325,7 @@ function renderBrowseTab(): string {
 
   return `
     <div class="filter-bar">
-      <input id="browse-filter" type="text" placeholder="Filter by provider..." value="${state.browseFilter}" />
+      <input id="browse-filter" type="text" placeholder="Filter by provider..." value="${esc(state.browseFilter)}" />
       <button class="btn btn-sm" data-action="filter-browse">Filter</button>
     </div>
     <div class="card-grid">${cards}</div>
@@ -331,7 +341,7 @@ function renderListingsTab(): string {
       listingsHtml += `
         <div class="card">
           <div class="card-header">
-            <strong>${l.display_name ?? l.model_id}</strong>
+            <strong>${esc(l.display_name ?? l.model_id)}</strong>
             <span class="badge ${l.is_active ? 'badge-ok' : 'badge-err'}">${l.is_active ? 'Active' : 'Inactive'}</span>
           </div>
           <div class="card-pricing">
@@ -340,7 +350,7 @@ function renderListingsTab(): string {
             &middot; Subscribers: ${l.subscriber_count ?? 0}
           </div>
           <div class="card-actions">
-            <button class="btn btn-danger btn-sm" data-action="delete-listing" data-id="${l.id}">Remove</button>
+            <button class="btn btn-danger btn-sm" data-action="delete-listing" data-id="${esc(l.id)}">Remove</button>
           </div>
         </div>`;
     }
@@ -356,10 +366,10 @@ function renderListingsTab(): string {
     for (const m of unlistedModels) {
       modelsHtml += `
         <div class="card card-compact">
-          <div class="card-header"><strong>${m.id}</strong></div>
-          <div class="card-meta">Provider: ${m.owned_by ?? 'unknown'}</div>
+          <div class="card-header"><strong>${esc(m.id)}</strong></div>
+          <div class="card-meta">Provider: ${esc(m.owned_by ?? 'unknown')}</div>
           <div class="card-actions">
-            <button class="btn btn-primary btn-sm" data-action="create-listing" data-model="${m.id}" data-provider="${m.owned_by ?? 'unknown'}">List on Market</button>
+            <button class="btn btn-primary btn-sm" data-action="create-listing" data-model="${esc(m.id)}" data-provider="${esc(m.owned_by ?? 'unknown')}">List on Market</button>
           </div>
         </div>`;
     }
@@ -383,14 +393,14 @@ function renderPricingTab(): string {
     stratList += `
       <div class="card">
         <div class="card-header">
-          <strong>${s.name}</strong>
+          <strong>${esc(s.name)}</strong>
           <span class="badge ${s.is_valid ? 'badge-ok' : 'badge-err'}">${s.is_valid ? 'Valid' : 'Invalid'}</span>
         </div>
-        <div class="card-meta">Max exec: ${s.max_execution_ms}ms &middot; Updated: ${s.updated_at?.slice(0, 10)}</div>
+        <div class="card-meta">Max exec: ${s.max_execution_ms}ms &middot; Updated: ${esc(s.updated_at?.slice(0, 10) ?? '')}</div>
         <div class="card-actions">
-          <button class="btn btn-sm" data-action="edit-strategy" data-id="${s.id}">Edit</button>
-          <button class="btn btn-sm" data-action="test-strategy" data-id="${s.id}">Test</button>
-          <button class="btn btn-danger btn-sm" data-action="delete-strategy" data-id="${s.id}">Delete</button>
+          <button class="btn btn-sm" data-action="edit-strategy" data-id="${esc(s.id)}">Edit</button>
+          <button class="btn btn-sm" data-action="test-strategy" data-id="${esc(s.id)}">Test</button>
+          <button class="btn btn-danger btn-sm" data-action="delete-strategy" data-id="${esc(s.id)}">Delete</button>
         </div>
       </div>`;
   }
@@ -400,7 +410,7 @@ function renderPricingTab(): string {
   if (state.testResult) {
     const r = state.testResult;
     testHtml = r.error
-      ? `<div class="test-result test-error">Error: ${r.error}</div>`
+      ? `<div class="test-result test-error">Error: ${esc(r.error)}</div>`
       : `<div class="test-result test-ok">Input: $${r.inputPricePerMTok.toFixed(4)}/MTok &middot; Output: $${r.outputPricePerMTok.toFixed(4)}/MTok &middot; ${r.executionMs}ms</div>`;
   }
 
@@ -411,7 +421,7 @@ function renderPricingTab(): string {
       <h3>${editing ? 'Edit Strategy' : 'New Strategy'}</h3>
       <div class="form-group">
         <label>Name</label>
-        <input id="strat-name" type="text" value="${editing?.name ?? ''}" placeholder="My pricing strategy" />
+        <input id="strat-name" type="text" value="${esc(editing?.name ?? '')}" placeholder="My pricing strategy" />
       </div>
       <div class="form-group">
         <label>Templates</label>
@@ -423,7 +433,7 @@ function renderPricingTab(): string {
       </div>
       <div class="form-group">
         <label>Code <span class="hint">(receives <code>input</code> object, must return <code>{ inputPricePerMTok, outputPricePerMTok }</code>)</span></label>
-        <textarea id="strat-code" rows="12" spellcheck="false">${editing?.code ?? TEMPLATES.flat.code}</textarea>
+        <textarea id="strat-code" rows="12" spellcheck="false">${esc(editing?.code ?? TEMPLATES.flat.code)}</textarea>
       </div>
       <div class="form-actions">
         <button class="btn btn-primary" data-action="save-strategy">Save</button>
@@ -486,17 +496,17 @@ function renderHealthTab(): string {
     cards += `
       <div class="card">
         <div class="card-header">
-          <strong>Listing ${shortId(id)}</strong>
+          <strong>Listing ${esc(shortId(id))}</strong>
           ${healthBadge(h.state)}
         </div>
         <div class="card-meta">
           Failures: ${h.failureCount} &middot; Successes: ${h.successCount}
-          ${h.lastFailureReason ? `&middot; Last: ${h.lastFailureReason}` : ''}
-          ${h.disabledUntil ? `&middot; Until: ${new Date(h.disabledUntil).toLocaleTimeString()}` : ''}
+          ${h.lastFailureReason ? `&middot; Last: ${esc(h.lastFailureReason)}` : ''}
+          ${h.disabledUntil ? `&middot; Until: ${esc(new Date(h.disabledUntil).toLocaleTimeString())}` : ''}
         </div>
         ${h.state !== 'closed' ? `
           <div class="card-actions">
-            <button class="btn btn-sm" data-action="reset-breaker" data-id="${id}">Reset Breaker</button>
+            <button class="btn btn-sm" data-action="reset-breaker" data-id="${esc(id)}">Reset Breaker</button>
           </div>` : ''}
       </div>`;
   }
@@ -523,7 +533,7 @@ function render() {
   if (state.loading) {
     content = '<div class="loading">Loading...</div>';
   } else if (state.error) {
-    content = `<div class="error">${state.error}</div>`;
+    content = `<div class="error">${esc(state.error)}</div>`;
   } else {
     switch (state.activeTab) {
       case 'browse': content = renderBrowseTab(); break;
@@ -535,7 +545,7 @@ function render() {
   }
 
   const successBanner = state.success
-    ? `<div class="success-banner">${state.success}</div>`
+    ? `<div class="success-banner">${esc(state.success)}</div>`
     : '';
 
   xai.render(`

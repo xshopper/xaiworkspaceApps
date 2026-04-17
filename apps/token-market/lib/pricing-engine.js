@@ -20,6 +20,10 @@ try {
   ivm = null;
 }
 
+if (!ivm) {
+  console.warn('[WARN] isolated-vm is the sole security boundary for user-defined pricing code. Without it, ALL code execution is blocked. Install isolated-vm to enable the pricing engine.');
+}
+
 const MAX_EXECUTION_MS = 100;
 const MAX_MEMORY_MB = 8;
 
@@ -51,7 +55,10 @@ export class PricingEngine {
       return { valid: false, error: 'Code exceeds maximum length (10,000 chars)' };
     }
 
-    // Block obviously dangerous patterns
+    // Best-effort blocklist — catches common mistakes in user-submitted code.
+    // NOTE: These string checks are trivially bypassable and are NOT a security
+    // boundary. The sole security boundary is `isolated-vm` (V8 isolate with no
+    // I/O, capped CPU, and capped memory). Do not rely on this list for safety.
     const blocked = ['require(', 'import(', 'import ', 'process.', 'global.', 'globalThis', 'eval(', 'Function('];
     for (const pat of blocked) {
       if (code.includes(pat)) {

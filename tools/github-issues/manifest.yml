@@ -47,7 +47,6 @@ operations:
     method: GET
     path: /user/repos
 
-permissions:
-  integrations: [github]
+permissions: {}
 
 sandbox: strict

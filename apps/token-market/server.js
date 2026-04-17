@@ -20,6 +20,8 @@ const ROUTER_URL = process.env.ROUTER_URL ?? process.env.ANTHROPIC_BASE_URL?.rep
 const LITELLM_URL = process.env.LITELLM_URL ?? 'http://localhost:4000';
 const CLIPROXY_URL = 'http://localhost:4001';
 const PLATFORM_KEY = process.env.ANTHROPIC_API_KEY ?? 'local-only';
+const BRIDGE_TOKEN = process.env.APP_BRIDGE_TOKEN ?? '';
+const WEBHOOK_SECRET = process.env.LITELLM_WEBHOOK_SECRET || BRIDGE_TOKEN;
 
 // ── Subsystems ───────────────────────────────────────────────────────────
 
@@ -114,8 +116,12 @@ routes.set('GET /models', async (_req, res) => {
 /** GET /listings — browse marketplace (proxy to router) */
 routes.set('GET /listings', async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
-  const params = url.searchParams.toString();
-  const data = await routerFetch('GET', `/api/market/listings?${params}`, authToken(req));
+  const allowed = new URLSearchParams();
+  for (const key of ['provider', 'model', 'page', 'limit']) {
+    if (url.searchParams.has(key)) allowed.set(key, url.searchParams.get(key));
+  }
+  const qs = allowed.toString();
+  const data = await routerFetch('GET', `/api/market/listings${qs ? `?${qs}` : ''}`, authToken(req));
   json(res, 200, data);
 });
 
@@ -288,8 +294,12 @@ routes.set('POST /health/:listingId/reset', async (req, res, params) => {
 /** GET /revenue — seller revenue log */
 routes.set('GET /revenue', async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
-  const params = url.searchParams.toString();
-  const data = await routerFetch('GET', `/api/market/revenue?${params}`, authToken(req));
+  const allowed = new URLSearchParams();
+  for (const key of ['seller_id', 'period', 'page', 'limit']) {
+    if (url.searchParams.has(key)) allowed.set(key, url.searchParams.get(key));
+  }
+  const qs = allowed.toString();
+  const data = await routerFetch('GET', `/api/market/revenue${qs ? `?${qs}` : ''}`, authToken(req));
   json(res, 200, data);
 });
 
@@ -302,8 +312,12 @@ routes.set('GET /revenue/summary', async (req, res) => {
 /** GET /expenses — buyer expense log */
 routes.set('GET /expenses', async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
-  const params = url.searchParams.toString();
-  const data = await routerFetch('GET', `/api/market/expenses?${params}`, authToken(req));
+  const allowed = new URLSearchParams();
+  for (const key of ['buyer_id', 'period', 'page', 'limit']) {
+    if (url.searchParams.has(key)) allowed.set(key, url.searchParams.get(key));
+  }
+  const qs = allowed.toString();
+  const data = await routerFetch('GET', `/api/market/expenses${qs ? `?${qs}` : ''}`, authToken(req));
   json(res, 200, data);
 });
 
@@ -324,6 +338,12 @@ routes.set('POST /sync', async (req, res) => {
 
 /** POST /hooks/completion — LiteLLM completion callback for billing + health tracking */
 routes.set('POST /hooks/completion', async (req, res) => {
+  // Authenticate webhook: check x-webhook-secret header or Authorization bearer
+  const secret = req.headers['x-webhook-secret'] ?? authToken(req);
+  if (!WEBHOOK_SECRET || secret !== WEBHOOK_SECRET) {
+    return json(res, 401, { error: 'Unauthorized: invalid or missing webhook secret' });
+  }
+
   const body = await jsonBody(req);
   if (!body) return json(res, 400, { error: 'Invalid JSON' });
 
@@ -427,13 +447,25 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log(`Token Market server listening on port ${PORT}`);
 
-  // Auto-sync local keys to master on startup
-  if (ROUTER_URL) {
+  // Auto-sync local keys to master on startup (bridge→router uses APP_BRIDGE_TOKEN)
+  if (ROUTER_URL && BRIDGE_TOKEN) {
     setTimeout(async () => {
       try {
         const models = await getLocalModels();
         if (models.length > 0) {
-          await routerFetch('POST', '/api/market/sync/keys', PLATFORM_KEY, { models });
+          const url = `${ROUTER_URL}/api/market/sync/keys`;
+          const resp = await fetch(url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-App-Bridge-Token': BRIDGE_TOKEN,
+            },
+            body: JSON.stringify({ models }),
+          });
+          if (!resp.ok) {
+            const text = await resp.text().catch(() => '');
+            throw new Error(`Router POST /api/market/sync/keys → ${resp.status}: ${text}`);
+          }
           console.log(`Synced ${models.length} local model(s) to master cliproxy`);
         }
       } catch (err) {

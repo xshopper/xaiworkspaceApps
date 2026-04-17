@@ -37,7 +37,6 @@ persona:
 permissions:
   resources: [storage, database]
   chat: [chat.send, chat.read]
-  integrations: [google]
 
 triggers:
   - kind: event

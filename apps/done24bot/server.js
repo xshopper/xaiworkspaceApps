@@ -6,7 +6,8 @@ const fs = require('fs');
 const path = require('path');
 
 const PORT = parseInt(process.env.APP_PORT || '3470', 10);
-const APP_DIR = process.env.APP_DIR || path.dirname(process.argv[1]);
+const APP_BRIDGE_TOKEN = process.env.APP_BRIDGE_TOKEN || '';
+const APP_DIR = process.env.APP_DATA_DIR || path.dirname(process.argv[1]);
 const CONFIG_PATH = path.join(APP_DIR, 'config.json');
 const SCREENSHOTS_DIR = path.join(APP_DIR, 'screenshots');
 
@@ -108,10 +109,46 @@ async function withPage(fn, opts = {}) {
   }
 }
 
+// --- URL validation (SSRF prevention) ---
+
+function validateUrl(urlStr) {
+  let parsed;
+  try {
+    parsed = new URL(urlStr);
+  } catch {
+    throw new Error('Invalid URL');
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('Only http and https URLs are allowed');
+  }
+
+  const hostname = parsed.hostname;
+
+  // Block localhost
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]') {
+    throw new Error('Localhost URLs are not allowed');
+  }
+
+  // Block RFC-1918 and link-local ranges
+  const ipv4Match = hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (ipv4Match) {
+    const [, a, b] = ipv4Match.map(Number);
+    if (a === 10) throw new Error('Private IP addresses are not allowed');
+    if (a === 172 && b >= 16 && b <= 31) throw new Error('Private IP addresses are not allowed');
+    if (a === 192 && b === 168) throw new Error('Private IP addresses are not allowed');
+    if (a === 169 && b === 254) throw new Error('Link-local addresses are not allowed');
+    if (a === 0) throw new Error('Invalid IP address');
+  }
+
+  return urlStr;
+}
+
 // --- Routes ---
 
 async function handleBrowse(body) {
   if (!body.url) return { error: 'url is required' };
+  validateUrl(body.url);
   return withPage(async (page) => {
     const title = await page.title();
     const text = await page.evaluate(() => document.body?.innerText?.slice(0, 50000) || '');
@@ -123,6 +160,7 @@ const MAX_SCREENSHOTS = 50;
 
 async function handleScreenshot(body) {
   if (!body.url) return { error: 'url is required' };
+  validateUrl(body.url);
   if (!fs.existsSync(SCREENSHOTS_DIR)) fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
   // Cap retained screenshots — delete oldest when limit exceeded
   try {
@@ -142,6 +180,7 @@ async function handleScreenshot(body) {
 
 async function handleExtract(body) {
   if (!body.url) return { error: 'url is required' };
+  validateUrl(body.url);
   return withPage(async (page) => {
     const selector = body.selector || 'body';
     const elements = await page.$$eval(selector, els =>
@@ -207,12 +246,18 @@ const server = http.createServer(async (req, res) => {
   // CORS for sandbox
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-App-Bridge-Token');
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
   try {
+    // /api/status is the health endpoint — no auth required
     if (url.pathname === '/api/status' && req.method === 'GET') {
       return sendJson(res, handleStatus());
+    }
+
+    // All other endpoints require APP_BRIDGE_TOKEN auth
+    if (APP_BRIDGE_TOKEN && req.headers['x-app-bridge-token'] !== APP_BRIDGE_TOKEN) {
+      return sendJson(res, { error: 'Unauthorized' }, 401);
     }
 
     if (req.method !== 'POST') {
@@ -230,7 +275,10 @@ const server = http.createServer(async (req, res) => {
     }
   } catch (err) {
     console.error(`[done24bot] ${req.method} ${url.pathname} error:`, err.message);
-    const status = err.message.includes('No API key') ? 401 : 500;
+    const msg = err.message;
+    const status = msg.includes('No API key') ? 401
+      : (msg.includes('not allowed') || msg.includes('Invalid URL') || msg.includes('Invalid IP')) ? 400
+      : 500;
     sendJson(res, { error: err.message }, status);
   }
 });

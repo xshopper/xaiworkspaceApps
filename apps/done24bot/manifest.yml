@@ -9,12 +9,12 @@ version: 0.1.0
 parameters:
   - name: apiKey
     label: Done24Bot API Key
-    type: password
+    type: secret
     required: false
     description: "Optional — leave blank to auto-link via xAI Workspace login, or get a key at done24bot.com/api-keys"
 
-startup: "cd ~/apps/com.done24bot.browser && node server.js"
-cleanup: "pkill -u \"$(id -u)\" -f 'done24bot.*server.js' 2>/dev/null || true"
+startup: "bash scripts/start.sh"
+cleanup: "bash scripts/stop.sh"
 port: 3470
 singleton: true
 configurable: true

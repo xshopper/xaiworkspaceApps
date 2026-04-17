@@ -43,7 +43,6 @@ persona:
 permissions:
   resources: [storage]
   chat: [chat.send, chat.read]
-  integrations: [github]
 
 triggers:
   - kind: webhook

@@ -14,7 +14,7 @@ if [ -n "$ROUTER_URL" ] && [ "$ROUTER_URL" != "local-only" ]; then
     curl -sf -X POST "${ROUTER_URL}/api/models/unregister" \
       -H "Authorization: Bearer ${API_KEY}" \
       -H "Content-Type: application/json" \
-      -d "{\"models\": ${MODELS}}" 2>/dev/null || true
+      -d "$(jq -n --argjson models "$MODELS" '{models: $models}')" 2>/dev/null || true
     echo "Models unregistered"
   fi
 fi
