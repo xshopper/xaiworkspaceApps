@@ -844,8 +844,19 @@ async function handleInstallApp(msg) {
       const ghMatch = sourceUrl.match(/^(https:\/\/github\.com\/[^/]+\/[^/]+)\/tree\/([^/]+)\/(.+)$/);
       if (ghMatch) {
         const repoUrl = ghMatch[1] + '.git';
-        const branchOrRef = ghMatch[2];
-        const ghSubdir = ghMatch[3];
+        // Percent-decode before validation — GitHub tree URLs commonly
+        // encode slashes (`feature%2Fbar`) and plus signs in branch names.
+        // `decodeURIComponent` throws on invalid percent-escapes (e.g. a
+        // lone `%`), which we want to surface as an input error rather
+        // than a git-clone failure.
+        let branchOrRef;
+        let ghSubdir;
+        try {
+          branchOrRef = decodeURIComponent(ghMatch[2]);
+          ghSubdir = decodeURIComponent(ghMatch[3]);
+        } catch {
+          throw new Error('Invalid percent-encoding in source URL');
+        }
         if (!/^[a-zA-Z0-9._/-]+$/.test(ghSubdir)) {
           throw new Error('Invalid source subdir path');
         }
