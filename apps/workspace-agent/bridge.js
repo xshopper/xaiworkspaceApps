@@ -564,7 +564,7 @@ async function handleInstallApp(msg) {
           continue;
         }
         const sanitized = String(v).replace(/[\n\r`$\\;|&"']/g, '');
-        if (!existing.includes(`${k}=`)) {
+        if (!new RegExp(`^${k}=`, 'm').test(existing)) {
           fs.appendFileSync(SECRETS_FILE, `${k}=${sanitized}\n`);
           addedKeys.push(k);
         }
