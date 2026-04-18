@@ -91,7 +91,15 @@ async function loginFlow(p: Page) {
     if (passInput) { passInput.value = password; passInput.dispatchEvent(new Event('input', { bubbles: true })); }
   }, EMAIL, PASSWORD);
 
-  await new Promise(r => setTimeout(r, 2_000));
+  // Wait for the credential inputs to reflect the values set via evaluate()
+  await p.waitForFunction(
+    () => {
+      const emailInput = document.querySelector('input[type="email"]') as HTMLInputElement;
+      const passInput = document.querySelector('input[type="password"]') as HTMLInputElement;
+      return !!emailInput?.value && !!passInput?.value;
+    },
+    { timeout: 5_000 }
+  );
 
   // Try to click Turnstile CAPTCHA
   const turnstileBox = await p.evaluate(() => {
@@ -104,7 +112,8 @@ async function loginFlow(p: Page) {
   });
   if (turnstileBox.found) {
     await p.mouse.click(turnstileBox.x, turnstileBox.y);
-    await new Promise(r => setTimeout(r, 5_000));
+    // No fixed sleep here — the waitForFunction below waits for the submit
+    // button to become enabled, which naturally covers CAPTCHA completion time.
   }
 
   // Wait for submit to enable and click
@@ -174,8 +183,14 @@ export async function sendMessage(p: Page, text: string): Promise<string> {
     textarea.dispatchEvent(new Event('compositionend', { bubbles: true }));
   }, text);
 
-  // Give Angular a tick to process ngModel and enable the button
-  await new Promise(r => setTimeout(r, 500));
+  // Wait for Angular to process the ngModel update and enable the send button
+  await p.waitForFunction(
+    () => {
+      const sendBtn = document.querySelector('.chat-send-btn') as HTMLButtonElement;
+      return !!sendBtn && !sendBtn.disabled;
+    },
+    { timeout: 5_000 }
+  );
 
   // Click send
   await p.evaluate(() => {
@@ -195,26 +210,23 @@ export async function sendMessage(p: Page, text: string): Promise<string> {
     botCountBefore
   );
 
-  // Poll until typing indicator disappears and content appears (up to 60s)
-  let botText = '';
-  for (let i = 0; i < 30; i++) {
-    await new Promise(r => setTimeout(r, 2_000));
-    const result = await p.evaluate(() => {
+  // Wait until the typing indicator disappears and the bot message has content (up to 60s)
+  const botHandle = await p.waitForFunction(
+    () => {
       const msgs = document.querySelectorAll('.chat-message--bot');
       const last = msgs[msgs.length - 1];
-      if (!last) return { done: false, text: '' };
+      if (!last) return false;
       const typing = last.querySelector('.chat-typing');
       const textEl = last.querySelector('.chat-message-text') || last.querySelector('.chat-message-content');
-      const text = textEl ? (textEl as HTMLElement).innerText.trim() : (last as HTMLElement).innerText.trim();
-      return { done: !typing && text.length > 0, text };
-    });
-    if (result.done) {
-      botText = result.text;
-      break;
-    }
-  }
+      const text = textEl
+        ? (textEl as HTMLElement).innerText.trim()
+        : (last as HTMLElement).innerText.trim();
+      return !typing && text.length > 0 ? text : false;
+    },
+    { timeout: 60_000 }
+  );
 
-  return botText;
+  return (await botHandle.jsonValue()) as string;
 }
 
 /**
