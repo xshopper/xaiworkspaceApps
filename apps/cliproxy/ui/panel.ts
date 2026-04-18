@@ -258,7 +258,7 @@ async function handleOAuthConnect(providerId: string, label: string) {
         const poll = await pollCliOAuth(currentState, startedAt, providerId);
         if (thisSession !== oauthSessionId) return; // superseded during await
         if (!oauthConnecting) return; // cancelled during await
-        if (poll.status === 'ok') {
+        if (poll.status === 'success') {
           cleanupSession();
           showSuccess(`${label} connected successfully! Models are now available.`);
           await loadData();
