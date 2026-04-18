@@ -1,6 +1,20 @@
 import type { PanelState, ProviderDef } from './types';
 import { getModels, deriveStatus, groupProviders, getTokenStatus, updateToken, disconnectProvider, connectProvider, startCliOAuth, pollCliOAuth } from './api';
 
+declare global {
+  interface Window {
+    __refresh: typeof loadData;
+    __updateToken: typeof handleUpdateToken;
+    __connect: typeof handleConnect;
+    __onProviderChange: typeof onProviderChange;
+    __cancelOAuth: typeof handleCancelOAuth;
+    __onKeyInput: typeof onKeyInput;
+    __onTokenInput: typeof onTokenInput;
+    __onTokenToggle: typeof onTokenToggle;
+    __cliproxyClickRegistered?: boolean;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Provider definitions for the connect form
 // ---------------------------------------------------------------------------
@@ -475,14 +489,14 @@ function render() {
   xai.render(html);
 
   // Re-attach global handlers after render (xai.render replaces innerHTML)
-  (window as any).__refresh = loadData;
-  (window as any).__updateToken = handleUpdateToken;
-  (window as any).__connect = handleConnect;
-  (window as any).__onProviderChange = onProviderChange;
-  (window as any).__cancelOAuth = handleCancelOAuth;
-  (window as any).__onKeyInput = onKeyInput;
-  (window as any).__onTokenInput = onTokenInput;
-  (window as any).__onTokenToggle = onTokenToggle;
+  window.__refresh = loadData;
+  window.__updateToken = handleUpdateToken;
+  window.__connect = handleConnect;
+  window.__onProviderChange = onProviderChange;
+  window.__cancelOAuth = handleCancelOAuth;
+  window.__onKeyInput = onKeyInput;
+  window.__onTokenInput = onTokenInput;
+  window.__onTokenToggle = onTokenToggle;
 }
 
 function onProviderChange() {
@@ -790,8 +804,8 @@ xai.on('ready', () => {
   }, 30_000);
 
   // Event delegation for disconnect buttons (registered once, not per render)
-  if (!(window as any).__cliproxyClickRegistered) {
-    (window as any).__cliproxyClickRegistered = true;
+  if (!window.__cliproxyClickRegistered) {
+    window.__cliproxyClickRegistered = true;
     document.addEventListener('click', (e) => {
       const btn = (e.target as HTMLElement).closest('[data-disconnect]') as HTMLElement | null;
       if (btn?.dataset.disconnect) handleDisconnect(btn.dataset.disconnect);
