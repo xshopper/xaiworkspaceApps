@@ -11,12 +11,15 @@ module.exports = {
     '^.+\\.tsx?$': ['ts-jest', { tsconfig: '<rootDir>/tsconfig.jest.json' }],
   },
   collectCoverageFrom: [
-    'apps/cliproxy/ui/**/*.ts',
+    'apps/*/ui/**/*.ts',
     '!**/*.d.ts',
   ],
   coverageThreshold: {
     global: {
       lines: 70,
+      statements: 70,
+      branches: 70,
+      functions: 80,
     },
   },
   coverageReporters: ['json', 'text', 'lcov'],
