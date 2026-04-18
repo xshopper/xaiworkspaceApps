@@ -5,7 +5,7 @@ import { getModels, deriveStatus, groupProviders, getTokenStatus, updateToken, d
 // Provider definitions for the connect form
 // ---------------------------------------------------------------------------
 
-const PROVIDERS: ProviderDef[] = [
+export const PROVIDERS: ProviderDef[] = [
   { id: 'claude',      label: 'Claude Code',       type: 'cli-subscription', hint: 'Browser OAuth — no API key needed' },
   { id: 'codex',       label: 'OpenAI Codex',      type: 'cli-subscription', hint: 'Browser OAuth — GPT models' },
   { id: 'gemini',      label: 'Gemini CLI',        type: 'cli-subscription', hint: 'Browser OAuth — no API key needed' },
@@ -24,7 +24,7 @@ const PROVIDERS: ProviderDef[] = [
 // State
 // ---------------------------------------------------------------------------
 
-const state: PanelState = {
+export const state: PanelState = {
   loading: false,
   error: null,
   success: null,
@@ -55,11 +55,11 @@ let connecting = false; // API key connect in progress
 // ---------------------------------------------------------------------------
 
 /** Look up human-readable label for a provider name (owned_by / id) */
-function providerLabel(name: string): string {
+export function providerLabel(name: string): string {
   return PROVIDERS.find(p => p.id === name)?.label ?? name;
 }
 
-function formatDate(iso: string | null): string {
+export function formatDate(iso: string | null): string {
   if (!iso) return '—';
   try {
     return new Date(iso).toLocaleString();
@@ -80,7 +80,7 @@ function showSuccess(msg: string) {
 // Data loading
 // ---------------------------------------------------------------------------
 
-async function loadData() {
+export async function loadData() {
   state.loading = true;
   state.error = null;
   render();
@@ -115,7 +115,7 @@ async function loadData() {
 // Actions
 // ---------------------------------------------------------------------------
 
-async function handleUpdateToken() {
+export async function handleUpdateToken() {
   const token = tokenInputDraft.trim();
   if (!token) return;
 
@@ -145,7 +145,7 @@ async function handleUpdateToken() {
   }
 }
 
-function handleDisconnect(providerName: string) {
+export function handleDisconnect(providerName: string) {
   const label = providerLabel(providerName);
   // confirm() doesn't work in sandbox iframes (no allow-modals) — proceed directly
   disconnectProvider(providerName);
@@ -153,7 +153,7 @@ function handleDisconnect(providerName: string) {
   setTimeout(loadData, 4000);
 }
 
-function handleConnect() {
+export function handleConnect() {
   if (!selectedProviderId) return;
 
   const def = PROVIDERS.find(p => p.id === selectedProviderId);
@@ -189,7 +189,7 @@ function handleConnect() {
   }
 }
 
-async function handleOAuthConnect(providerId: string, label: string) {
+export async function handleOAuthConnect(providerId: string, label: string) {
   if (oauthConnecting) {
     state.error = 'Authentication already in progress — cancel it first.';
     render();
@@ -291,7 +291,7 @@ async function handleOAuthConnect(providerId: string, label: string) {
   render();
 }
 
-function handleCancelOAuth() {
+export function handleCancelOAuth() {
   ++oauthSessionId; // invalidate any in-flight poll callbacks
   if (oauthPollTimer) clearTimeout(oauthPollTimer);
   oauthPollTimer = null;
@@ -512,7 +512,7 @@ function onTokenToggle() {
 // Escape helpers
 // ---------------------------------------------------------------------------
 
-function escapeHtml(str: string): string {
+export function escapeHtml(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
@@ -770,6 +770,27 @@ const CSS = `
     .model-tag { font-size: 10px; padding: 2px 4px; }
   }
 `;
+
+// ---------------------------------------------------------------------------
+// Test-only accessor for module-level mutable state.
+// Not part of the public runtime API — exported solely so unit tests can
+// arrange/inspect the state a panel handler reads or mutates.
+// ---------------------------------------------------------------------------
+
+export const __test = {
+  get tokenCardProvider(): string | null { return tokenCardProvider; },
+  set tokenCardProvider(v: string | null) { tokenCardProvider = v; },
+  get selectedProviderId(): string { return selectedProviderId; },
+  set selectedProviderId(v: string) { selectedProviderId = v; },
+  get apiKeyDraft(): string { return apiKeyDraft; },
+  set apiKeyDraft(v: string) { apiKeyDraft = v; },
+  get tokenInputDraft(): string { return tokenInputDraft; },
+  set tokenInputDraft(v: string) { tokenInputDraft = v; },
+  get oauthConnecting(): boolean { return oauthConnecting; },
+  get oauthState(): string | null { return oauthState; },
+  get oauthAuthUrl(): string | null { return oauthAuthUrl; },
+  get connecting(): boolean { return connecting; },
+};
 
 // ---------------------------------------------------------------------------
 // Bootstrap
