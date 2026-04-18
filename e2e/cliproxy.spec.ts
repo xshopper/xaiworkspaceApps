@@ -30,24 +30,27 @@ describe('Cliproxy mini app — @cliproxy commands', () => {
 
   test('@cliproxy status returns provider and service info', async () => {
     const text = await mentionApp(page, 'cliproxy', 'status');
-    expect(text).toMatch(/cliproxy|provider|connected|service|model|running|setup|status/i);
+    expect(text).toMatch(/running|setup/i);
   }, 90_000);
 
   test('@cliproxy models lists available models', async () => {
     const text = await mentionApp(page, 'cliproxy', 'models');
-    expect(text).toMatch(/model|provider|available|list|no model|connect/i);
+    expect(text).toMatch(/model/i);
+    expect(text).toMatch(/available|list/i);
   }, 90_000);
 
   test('@cliproxy setkey registers an API key provider', async () => {
     // Use a syntactically valid but non-functional placeholder key to verify
     // the command is accepted and returns a confirmation or validation response.
     const text = await mentionApp(page, 'cliproxy', 'setkey grok e2e-test-placeholder-key');
-    expect(text).toMatch(/key|set|register|saved|provider|grok|connect|update/i);
+    expect(text).toMatch(/saved|ok/i);
+    expect(text).toMatch(/grok/i);
   }, 90_000);
 
   test('@cliproxy disconnect removes the provider', async () => {
     const text = await mentionApp(page, 'cliproxy', 'disconnect grok');
-    expect(text).toMatch(/disconnect|remov|grok|provider|done|success|not.?found|not.?connected/i);
+    expect(text).toMatch(/done|success/i);
+    expect(text).toMatch(/grok/i);
   }, 90_000);
 
 });
