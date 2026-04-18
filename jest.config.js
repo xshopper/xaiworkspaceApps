@@ -1,8 +1,13 @@
 /** @type {import('jest').Config} */
 module.exports = {
-  preset: 'ts-jest',
   testEnvironment: 'node',
-  testMatch: ['<rootDir>/e2e/**/*.spec.ts'],
+  testMatch: [
+    '<rootDir>/e2e/**/*.spec.ts',
+    '<rootDir>/apps/**/*.spec.ts',
+  ],
   testTimeout: 120_000,
   maxWorkers: 1,
+  transform: {
+    '^.+\\.tsx?$': ['ts-jest', { tsconfig: '<rootDir>/tsconfig.jest.json' }],
+  },
 };
