@@ -95,7 +95,15 @@ async function loadData() {
     const cliProvider = cliProviders.find(p => p.name === 'claude') ?? cliProviders[0] ?? null;
     if (cliProvider) {
       tokenCardProvider = cliProvider.name;
-      state.tokenStatus = await getTokenStatus(cliProvider.name);
+      const tokenResult = await getTokenStatus(cliProvider.name);
+      if (tokenResult.ok) {
+        state.tokenStatus = tokenResult.data;
+      } else {
+        state.tokenStatus = null;
+        if (tokenResult.auth) {
+          state.error = tokenResult.message || 'Authentication required for token status.';
+        }
+      }
     } else {
       tokenCardProvider = null;
       state.tokenStatus = null;
@@ -204,7 +212,19 @@ async function handleOAuthConnect(providerId: string, label: string) {
   const result = await startCliOAuth(providerId);
   // Guard: user may have cancelled during the await
   if (thisSession !== oauthSessionId || !oauthConnecting) return;
-  if (result?.authorize_url) {
+  if (!result.ok) {
+    oauthConnecting = false;
+    if (result.auth) {
+      state.error = result.message || 'Authentication required. Please sign in and try again.';
+      state.success = null;
+      render();
+    } else {
+      connectProvider(providerId);
+      showSuccess(`Connecting ${label}... Check chat for auth instructions.`);
+    }
+    return;
+  }
+  if (result.authorize_url) {
     oauthState = result.state;
     const authUrl = result.authorize_url;
     const startedAt = result.started_at;

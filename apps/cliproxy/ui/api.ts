@@ -37,14 +37,21 @@ export function groupProviders(models: Model[]): Provider[] {
   }));
 }
 
+export type TokenResult =
+  | { ok: true; data: TokenStatus }
+  | { ok: false; auth: boolean; message: string };
+
 /** Get token status for a CLI subscription (e.g. Claude) */
-export async function getTokenStatus(provider: string): Promise<TokenStatus | null> {
+export async function getTokenStatus(provider: string): Promise<TokenResult> {
   try {
     // Auth header is injected automatically by the backend proxy
     const res = await xai.http<TokenStatus>(`${BASE}/admin/token?provider=${encodeURIComponent(provider)}`);
-    return res.data;
-  } catch {
-    return null;
+    return { ok: true, data: res.data };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    const auth = message.includes('401') || message.includes('Authentication required') ||
+                 message.includes('403') || message.includes('forbidden');
+    return { ok: false, auth, message };
   }
 }
 
@@ -77,15 +84,23 @@ export function connectProvider(providerId: string, apiKey?: string): void {
 
 // ── CLIProxy OAuth (via router backend) ──────────────────────────────────
 
+export type OAuthStartResult =
+  | { ok: true; authorize_url: string; state: string; started_at: string }
+  | { ok: false; auth: boolean; message: string };
+
 /**
  * Start OAuth flow via the router backend.
  * The backend proxies to the user's EC2 CLIProxyAPI and handles callback routing.
  */
-export async function startCliOAuth(provider: string): Promise<{ authorize_url: string; state: string; started_at: string } | null> {
+export async function startCliOAuth(provider: string): Promise<OAuthStartResult> {
   try {
-    return await xai.cliproxy.startOAuth(provider);
-  } catch {
-    return null;
+    const session = await xai.cliproxy.startOAuth(provider);
+    return { ok: true, ...session };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    const auth = message.includes('401') || message.includes('Authentication required') ||
+                 message.includes('403') || message.includes('forbidden');
+    return { ok: false, auth, message };
   }
 }
 
