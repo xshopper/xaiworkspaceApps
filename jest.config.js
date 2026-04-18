@@ -4,6 +4,7 @@ module.exports = {
   testMatch: [
     '<rootDir>/e2e/**/*.spec.ts',
     '<rootDir>/apps/**/*.spec.ts',
+    '<rootDir>/test/unit/**/*.spec.{js,ts}',
   ],
   testTimeout: 120_000,
   maxWorkers: 1,
