@@ -26,6 +26,9 @@ jobs:
           echo "apps=$CHANGED" >> $GITHUB_OUTPUT
           echo "Changed apps: $CHANGED"
 
+      - name: Validate manifests
+        run: ./test/validate-manifests.sh
+
       - name: Build and release each changed app
         run: |
           for APP in ${{ steps.changes.outputs.apps }}; do
