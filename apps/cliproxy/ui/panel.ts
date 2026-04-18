@@ -1,5 +1,7 @@
 import type { PanelState, ProviderDef } from './types';
 import { getModels, deriveStatus, groupProviders, getTokenStatus, updateToken, disconnectProvider, connectProvider, startCliOAuth, pollCliOAuth } from './api';
+import { classifyPollStatus, hasTimedOut, isValidAuthUrl, nextPollDelay, OAUTH_POLL_MAX_MS, POLL_MIN_DELAY_MS } from './oauth-state';
+import { validateConnectForm } from './form';
 
 // ---------------------------------------------------------------------------
 // Provider definitions for the connect form
@@ -157,17 +159,24 @@ function handleConnect() {
   if (!selectedProviderId) return;
 
   const def = PROVIDERS.find(p => p.id === selectedProviderId);
-  if (!def) return;
+  const result = validateConnectForm(def, apiKeyDraft);
 
-  if (def.type === 'api-key') {
-    const key = apiKeyDraft.trim();
-    if (!key) { state.error = 'Please enter an API key'; state.success = null; render(); return; }
+  if (result.kind === 'noop') return;
+
+  if (result.kind === 'invalid') {
+    state.error = result.error;
+    state.success = null;
+    render();
+    return;
+  }
+
+  if (result.kind === 'api-key') {
     connecting = true;
     render();
-    connectProvider(selectedProviderId, key);
+    connectProvider(result.providerId, result.apiKey);
     showSuccess(`Submitting API key... Refreshing in a few seconds.`);
     // Defer form reset until after loadData confirms the state
-    const submittedProvider = selectedProviderId;
+    const submittedProvider = result.providerId;
     setTimeout(async () => {
       connecting = false;
       await loadData();
@@ -178,15 +187,16 @@ function handleConnect() {
       }
       render();
     }, 4000);
-  } else {
-    // CLI subscription — start OAuth via CLIProxyAPI or chat
-    handleOAuthConnect(selectedProviderId, def.label).catch(err => {
-      oauthConnecting = false;
-      state.error = err?.message ?? 'OAuth failed to start';
-      state.success = null;
-      render();
-    });
+    return;
   }
+
+  // CLI subscription — start OAuth via CLIProxyAPI or chat
+  handleOAuthConnect(result.providerId, result.label).catch(err => {
+    oauthConnecting = false;
+    state.error = err?.message ?? 'OAuth failed to start';
+    state.success = null;
+    render();
+  });
 }
 
 async function handleOAuthConnect(providerId: string, label: string) {
@@ -209,7 +219,7 @@ async function handleOAuthConnect(providerId: string, label: string) {
     const authUrl = result.authorize_url;
     const startedAt = result.started_at;
     // Validate URL scheme
-    if (!/^https?:\/\//i.test(authUrl)) {
+    if (!isValidAuthUrl(authUrl)) {
       oauthState = null;
       oauthConnecting = false;
       connectProvider(providerId);
@@ -228,8 +238,7 @@ async function handleOAuthConnect(providerId: string, label: string) {
 
     // Poll for completion using setTimeout recursion (supports slow_down backoff)
     const oauthPollStart = Date.now();
-    const OAUTH_POLL_MAX_MS = 15 * 60 * 1000;
-    let pollDelay = 3000;
+    let pollDelay = POLL_MIN_DELAY_MS;
     if (oauthPollTimer) clearTimeout(oauthPollTimer);
 
     // Use a local timer handle per session to avoid aliasing with newer sessions
@@ -249,7 +258,7 @@ async function handleOAuthConnect(providerId: string, label: string) {
         try {
         if (thisSession !== oauthSessionId) return; // stale session — exit silently
         const currentState = oauthState;
-        if (!currentState || Date.now() - oauthPollStart > OAUTH_POLL_MAX_MS) {
+        if (!currentState || hasTimedOut(oauthPollStart, Date.now(), OAUTH_POLL_MAX_MS)) {
           cleanupSession();
           state.error = 'OAuth timed out. Please try again.';
           render();
@@ -258,19 +267,20 @@ async function handleOAuthConnect(providerId: string, label: string) {
         const poll = await pollCliOAuth(currentState, startedAt, providerId);
         if (thisSession !== oauthSessionId) return; // superseded during await
         if (!oauthConnecting) return; // cancelled during await
-        if (poll.status === 'ok') {
+        const outcome = classifyPollStatus(poll.status);
+        if (outcome === 'success') {
           cleanupSession();
           showSuccess(`${label} connected successfully! Models are now available.`);
           await loadData();
           tokenCardProvider = providerId; // show the just-connected provider after loadData
           render();
-        } else if (poll.status === 'error') {
+        } else if (outcome === 'error') {
           cleanupSession();
           state.error = poll.message || 'OAuth failed. Try again or use the chat command.';
           render();
         } else {
           // 'wait' or 'slow_down' — schedule next poll
-          if (poll.status === 'slow_down') pollDelay = Math.min(pollDelay + 5000, 30000); // RFC 8628 §3.5
+          pollDelay = nextPollDelay(poll.status, pollDelay); // RFC 8628 §3.5
           scheduleOAuthPoll();
         }
         } catch (err: unknown) {
