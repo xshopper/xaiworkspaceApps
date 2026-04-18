@@ -15,6 +15,21 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate manifests
+        run: bash test/validate-manifests.sh
+
+      - name: Run tests
+        run: npm test
+
       - name: Detect changed apps
         id: changes
         run: |
