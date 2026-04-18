@@ -209,6 +209,17 @@ describe('updateToken', () => {
       error: 'invalid token',
     });
   });
+
+  test('returns error response when the HTTP call rejects (network failure)', async () => {
+    xaiStub.http.mockRejectedValue(new Error('network timeout'));
+
+    const result = await updateToken('claude', 'sk-token');
+
+    expect(result).toEqual({
+      ok: false,
+      error: 'network timeout',
+    });
+  });
 });
 
 describe('connectProvider', () => {

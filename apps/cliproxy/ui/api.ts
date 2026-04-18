@@ -50,13 +50,18 @@ export async function getTokenStatus(provider: string): Promise<TokenStatus | nu
 
 /** Update token for a provider */
 export async function updateToken(provider: string, accessToken: string): Promise<{ ok: boolean; expired?: string; error?: string }> {
-  // Auth header is injected automatically by the backend proxy
-  const res = await xai.http<{ ok: boolean; expired?: string; error?: string }>(`${BASE}/admin/token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ provider, access_token: accessToken }),
-  });
-  return res.data;
+  try {
+    // Auth header is injected automatically by the backend proxy
+    const res = await xai.http<{ ok: boolean; expired?: string; error?: string }>(`${BASE}/admin/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, access_token: accessToken }),
+    });
+    return res.data;
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    return { ok: false, error: message };
+  }
 }
 
 /** Disconnect a provider via chat command (no direct API) */
