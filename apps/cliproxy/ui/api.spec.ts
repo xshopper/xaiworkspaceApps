@@ -152,7 +152,7 @@ describe('getTokenStatus', () => {
 
     const result = await getTokenStatus('claude');
 
-    expect(result).toEqual(sampleStatus);
+    expect(result).toEqual({ ok: true, data: sampleStatus });
     expect(xaiStub.http).toHaveBeenCalledWith(
       'http://localhost:4001/admin/token?provider=claude',
     );
@@ -168,16 +168,24 @@ describe('getTokenStatus', () => {
     );
   });
 
-  test('returns null when the HTTP call rejects (500)', async () => {
+  test('returns ok:false with auth:false on transient server errors (500)', async () => {
     xaiStub.http.mockRejectedValue(new Error('HTTP 500'));
 
-    expect(await getTokenStatus('claude')).toBeNull();
+    expect(await getTokenStatus('claude')).toEqual({
+      ok: false,
+      auth: false,
+      message: 'HTTP 500',
+    });
   });
 
-  test('returns null on auth failure (401) so UI can trigger OAuth', async () => {
+  test('returns ok:false with auth:true on auth failure (401) so UI can escalate to re-authentication', async () => {
     xaiStub.http.mockRejectedValue(new Error('HTTP 401 Authentication required'));
 
-    expect(await getTokenStatus('claude')).toBeNull();
+    expect(await getTokenStatus('claude')).toEqual({
+      ok: false,
+      auth: true,
+      message: 'HTTP 401 Authentication required',
+    });
   });
 });
 
@@ -246,14 +254,28 @@ describe('startCliOAuth', () => {
     };
     xaiStub.cliproxy.startOAuth.mockResolvedValue(session);
 
-    expect(await startCliOAuth('claude')).toEqual(session);
+    expect(await startCliOAuth('claude')).toEqual({ ok: true, ...session });
     expect(xaiStub.cliproxy.startOAuth).toHaveBeenCalledWith('claude');
   });
 
-  test('returns null when the backend throws', async () => {
+  test('returns ok:false with auth:false on non-auth backend errors', async () => {
     xaiStub.cliproxy.startOAuth.mockRejectedValue(new Error('backend unreachable'));
 
-    expect(await startCliOAuth('claude')).toBeNull();
+    expect(await startCliOAuth('claude')).toEqual({
+      ok: false,
+      auth: false,
+      message: 'backend unreachable',
+    });
+  });
+
+  test('returns ok:false with auth:true on auth errors', async () => {
+    xaiStub.cliproxy.startOAuth.mockRejectedValue(new Error('HTTP 401 Authentication required'));
+
+    expect(await startCliOAuth('claude')).toEqual({
+      ok: false,
+      auth: true,
+      message: 'HTTP 401 Authentication required',
+    });
   });
 });
 
