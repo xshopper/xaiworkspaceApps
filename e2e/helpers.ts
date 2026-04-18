@@ -6,14 +6,41 @@ const BASE_URL = process.env.E2E_BASE_URL || 'https://xaiworkspace.com';
 let browser: Browser;
 let page: Page;
 
+// Only endpoints under this host are considered valid WS targets. We pin
+// the expected domain to reject a compromised/typosquatted outputs file
+// that returns e.g. `wss://evil.example.com/foo` from the build.
+const EXPECTED_WS_HOST_SUFFIX = '.done24bot.com';
+const EXPECTED_WS_HOST_EXACT = 'done24bot.com';
+
+function assertTrustedWsUrl(url: string): string {
+  const parsed = new URL(url);
+  if (parsed.protocol !== 'wss:' && parsed.protocol !== 'ws:') {
+    throw new Error(`Untrusted WS URL protocol: ${parsed.protocol}`);
+  }
+  if (parsed.hostname !== EXPECTED_WS_HOST_EXACT && !parsed.hostname.endsWith(EXPECTED_WS_HOST_SUFFIX)) {
+    throw new Error(`Untrusted WS URL host: ${parsed.hostname} (expected done24bot.com or *.done24bot.com)`);
+  }
+  return url;
+}
+
 /**
- * Fetch the real WebSocket URL from done24bot_outputs.json.
+ * Resolve the WebSocket URL used by the E2E harness.
+ *
+ * Precedence:
+ *   1. `E2E_WS_URL` env var — lets CI/developers pin a specific endpoint
+ *      (e.g. a staging env, a local tunnel). Validated against the expected
+ *      host pattern so a typo can't silently redirect traffic.
+ *   2. Fetch done24bot's public outputs file as a last resort. The returned
+ *      URL is also pattern-validated before we hand it to puppeteer.
  */
 async function getWsUrl(): Promise<string> {
+  const override = process.env.E2E_WS_URL;
+  if (override) return assertTrustedWsUrl(override);
+
   const res = await fetch('https://done24bot.com/done24bot_outputs.json');
   const config: any = await res.json();
   const ws = config.custom.WEBSOCKET_API;
-  return `${ws.endpoint}/${ws.stageName}`;
+  return assertTrustedWsUrl(`${ws.endpoint}/${ws.stageName}`);
 }
 
 const EMAIL = process.env.E2E_EMAIL || process.env.TEST_EMAIL || '';
