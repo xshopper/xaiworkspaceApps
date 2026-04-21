@@ -10,8 +10,13 @@ APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 echo "=== OpenClaw mini app install ==="
 
 # ── 1. Install openclaw CLI + dependencies into app directory ───────────────
+# Do NOT silence stderr — pnpm failures (network / ENOSPC / resolution
+# conflicts) must surface in the install_result.error payload. The 55 MB
+# openclaw tarball + postinstall hooks routinely take >120s on cold cold
+# workers, so failure output is the only signal the bridge has about
+# whether the node_modules tree is complete.
 echo "Installing dependencies..."
-cd "$APP_DIR" && pnpm install --prod 2>/dev/null
+cd "$APP_DIR" && pnpm install --prod --reporter=append-only
 
 # ── 3. Persist bridge env vars to secrets.env (if not already present) ───────
 SECRETS_FILE="/etc/xai/secrets.env"

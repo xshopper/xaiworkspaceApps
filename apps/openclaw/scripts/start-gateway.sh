@@ -3,7 +3,15 @@
 # Used by pm2 ecosystem config as the gateway entry point.
 set -euo pipefail
 set -a
-[ -f /etc/xai/secrets.env ] && source /etc/xai/secrets.env
+# Prefer the per-user copy written by entrypoint.sh (mode 600, chown $WS_USER).
+# /etc/xai/secrets.env is root-owned 600 — sourcing it as the derived user
+# aborts the script under set -e with "Permission denied".
+for SECRETS_FILE in "$HOME/.openclaw/secrets.env" /etc/xai/secrets.env; do
+  if [ -r "$SECRETS_FILE" ]; then
+    source "$SECRETS_FILE"
+    break
+  fi
+done
 set +a
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 OPENCLAW_BIN="${APP_DIR}/node_modules/.bin/openclaw"
