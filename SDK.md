@@ -1986,3 +1986,285 @@ The trust-tier pipeline is intentionally minimal in M0. The following constraint
 
 Out-of-tree system mini-apps are planned for **M1.1**, which will add Ed25519 signature verification, a publish flow for signed system bundles, and a runtime capability proxy that enforces `system.*` permission strings instead of relying on code review. Until then, any new system-tier surface must go through the `xaiworkspace-frontend` repo and be reviewed like first-party code.
 
+---
+
+## Mini-app resource API
+
+Resources a mini-app process (pm2) can call from its workspace container. All
+resources are reached over HTTP(S) using either the bridge-provided env vars
+(`ROUTER_URL`, `BRIDGE_URL`, `APP_API_KEY`) or the local IPC port. Prefer the
+bridge-local endpoints when available — they avoid a router round-trip.
+
+### Environment contract
+
+Every mini-app process launched by pm2 inherits the following env vars from
+the bridge:
+
+| Var | Scope | Purpose |
+|-----|-------|---------|
+| `APP_API_KEY` | every app | LiteLLM virtual Bearer for authenticated router calls. Legacy name: `ANTHROPIC_API_KEY` (still accepted but deprecated — see `connect/index.js` for a rename-tolerant consumer) |
+| `ROUTER_URL` | every app | Router base URL (`https://router.xaiworkspace.com` or env equivalent) |
+| `BRIDGE_URL` | every app | Bridge loopback URL for agent-to-agent IPC (default `http://127.0.0.1:19099`) |
+| `APP_PORT` | apps with `manifest.mcp.port` or `manifest.permissions.network` | Port the app must bind to on `127.0.0.1` |
+| `APP_INSTANCE_NAME` | multi-install apps | Unique per install (`default`, or user-chosen slug-compatible name) |
+| `APP_PARAMETERS` | manifest.parameters consumers | JSON-serialised user-supplied install parameters |
+
+Never log `APP_API_KEY` — it is a per-app LiteLLM virtual key. Treat it like
+a rotating secret.
+
+### OAuth-backed secrets (`oc-secret`)
+
+Mini-apps declaring `permissions.secrets: [...]` can request a user-scoped
+OAuth token over the router's `/api/oauth/connections` API. Tokens are
+server-refreshed; the mini-app never stores token material on disk.
+
+```js
+// Retrieve a connected provider's current access token (auto-refresh included)
+const res = await fetch(`${process.env.ROUTER_URL}/api/oauth/connections/${provider}/token`, {
+  headers: { Authorization: `Bearer ${process.env.APP_API_KEY}` },
+});
+const { access_token, expires_at, account_email } = await res.json();
+```
+
+Multi-account (post-April 2026): pass `?account_email=<email>` to scope the
+lookup to a specific account. When omitted, the router returns the oldest
+(primary) account — matches the legacy single-account contract so existing
+mini-apps don't need changes to keep working.
+
+List connections:
+
+```js
+await fetch(`${process.env.ROUTER_URL}/api/oauth/connections`, {
+  headers: { Authorization: `Bearer ${process.env.APP_API_KEY}` },
+}).then(r => r.json());
+// → { connections: [{ provider, provider_user, scope, expires_at, ... }] }
+```
+
+Disconnect:
+
+```js
+await fetch(
+  `${process.env.ROUTER_URL}/api/oauth/connections/${provider}` +
+  (accountEmail ? `?account_email=${encodeURIComponent(accountEmail)}` : ''),
+  { method: 'DELETE', headers: { Authorization: `Bearer ${process.env.APP_API_KEY}` } },
+);
+```
+
+The canonical MCP surface for OAuth lives in `xaiworkspaceApps/apps/connect/index.js` — when `@connect` is installed and running, MCP callers prefer its JSON-RPC tools (`get_token`, `list_connections`, `is_connected`, `disconnect`) over the raw HTTP API.
+
+### Per-user key-value storage (`/api/data`)
+
+Apps declaring `permissions.storage: true` can persist JSON rows scoped to
+the user + app + table. Backed by `oc_app_data` in Postgres.
+
+| Method | Path | Body / Query | Returns |
+|--------|------|-------------|---------|
+| `GET`  | `/api/data/{appDomain}/{table}` | — | `{ items: [{ id, data }] }` |
+| `GET`  | `/api/data/{appDomain}/{table}/{id}` | — | `{ id, data }` |
+| `POST` | `/api/data/{appDomain}/{table}` | `{ data: {...} }` | `{ id, data }` |
+| `PATCH`| `/api/data/{appDomain}/{table}/{id}` | `{ data: {...} }` | `{ id, data }` |
+| `DELETE`| `/api/data/{appDomain}/{table}/{id}` | — | `{ ok: true }` |
+
+`appDomain` must match the app's manifest `identifier` (e.g. `com.xaiworkspace.connect`). Cross-app reads are rejected. `{table}` matches `^[a-z0-9][a-z0-9_-]{0,49}$`.
+
+```js
+// Save a per-user row
+await fetch(`${process.env.ROUTER_URL}/api/data/${APP_DOMAIN}/preferences`, {
+  method: 'POST',
+  headers: {
+    Authorization: `Bearer ${process.env.APP_API_KEY}`,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({ data: { theme: 'dark', model: 'sonnet-4.6' } }),
+});
+```
+
+Concurrency: last-write-wins at the row level. If you need atomic read-modify-write, use the `mcpCall` bridge (below) with a server-side transaction.
+
+### Send chat messages (`send_message`)
+
+Apps declaring `permissions.chat: [chat.send]` can push messages into the
+user's chat window via the bridge's WebSocket bus.
+
+```js
+await fetch(`${process.env.BRIDGE_URL}/api/app-message`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    from: process.env.APP_INSTANCE_NAME || 'default',
+    to: 'chat',                  // or another agent instance name
+    message: '...',              // markdown supported
+  }),
+});
+```
+
+The bridge relays `send_message` to the frontend `app.handler.ts` which
+appends to chat history. The message `sender` renders as `system`; use
+`buttons` on the payload to add interactive callback buttons.
+
+Cross-bridge / cross-domain routing is Milestone 1+ (see `MVP-Plan.md` item 7).
+
+### Request user approval (`approval_request`)
+
+For security-sensitive actions (payments, destructive ops, elevated scopes)
+the app can pause and ask the user inline via a modal:
+
+```js
+// WS payload shipped to the frontend via the bridge
+{
+  type: 'approval_request',
+  request_id: crypto.randomUUID(),
+  app_identifier: 'com.xshopper.payments',
+  title: 'Approve $500 payment to supplier-abc?',
+  description: 'This will transfer funds via Stripe. Cannot be reversed.',
+  danger_level: 'high',        // 'low' | 'medium' | 'high', defaults to high
+  timeout_ms: 60_000,          // clamped to [5_000, 600_000]
+}
+```
+
+The frontend modal returns `{ request_id, approved: boolean }` on the same
+WS connection. If the user does not respond within `timeout_ms`, the
+approval resolves as `approved: false`.
+
+### MCP server registration (self-registering apps)
+
+Apps with `manifest.mcp.port` running their own JSON-RPC server must
+register with the router so LiteLLM can route MCP calls into them:
+
+```js
+await fetch(`${process.env.ROUTER_URL}/api/mcp/register`, {
+  method: 'POST',
+  headers: {
+    Authorization: `Bearer ${process.env.APP_API_KEY}`,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({ appSlug: 'connect', port: 3470 }),
+});
+```
+
+Re-register on startup (not just install). If registration fails, direct
+`POST /mcp` calls still work — the registry is used for LiteLLM discovery
+only. See `xaiworkspaceApps/apps/connect/index.js` for the canonical
+exponential-backoff pattern.
+
+### Triggers — payload schema
+
+Triggers let a mini-app react to events, cron schedules, or webhooks without
+being explicitly invoked. Declare them in the manifest under `triggers:` and
+handle them at runtime by subscribing to `app_trigger` WS messages (or by
+reading the HTTP body on a webhook trigger).
+
+#### Manifest declaration
+
+```yaml
+triggers:
+  - kind: cron
+    config: { cron: "0 9 * * 1-5" }
+  - kind: event
+    config: { event: "email.received", filter: { label: "sales" } }
+  - kind: webhook
+    config: { events: ["push", "pull_request"] }
+```
+
+`kind` must be one of: `cron`, `event`, `webhook`. Unknown kinds are rejected
+at install time.
+
+#### WS `app_trigger` payload
+
+All trigger kinds reach the frontend + any running pm2 mini-app via a
+uniform WS envelope:
+
+```json
+{
+  "type": "app_trigger",
+  "appSlug": "email-manager",
+  "triggerKind": "cron",
+  "payload": { ... kind-specific fields ... }
+}
+```
+
+Frontend handler: `src/app/services/ws-handlers/app.handler.ts` sets
+`ctx.appTriggerFired` to `{ slug, kind, payload, timestamp }`. Mini-apps
+running inside a workspace container can subscribe on the bridge WS at
+`BRIDGE_URL` (same envelope).
+
+#### Per-kind `payload` shape
+
+**`cron`** (server-fired by `src/schedulers/app-triggers.js`):
+
+```json
+{
+  "triggerKind": "cron",
+  "cronExpr": "0 9 * * 1-5",
+  "firedAt": "2026-04-20T09:00:00.000Z"
+}
+```
+
+Delivery guarantee: the router uses an atomic `UPDATE … WHERE last_fired < now`
+guard so a cron trigger fires at most once across horizontally scaled router
+tasks. Skipped ticks (e.g. user offline) are NOT replayed — if the user was
+disconnected when the cron fired, the app will not see it. Design cron
+handlers to be idempotent and to reconcile from stored state on reconnect.
+
+**`event`** (typically fired by another mini-app or a system source — e.g.
+`email.received`, `file.uploaded`):
+
+```json
+{
+  "triggerKind": "event",
+  "event": "email.received",
+  "source": "email-manager",
+  "data": { ... event-specific payload ... }
+}
+```
+
+Matching: when the manifest declares `config.filter`, the router only fires
+the trigger if every filter field matches (string equals, array contains).
+Unmatched events are dropped silently.
+
+**`webhook`** (fired by `POST /api/app-webhook/:appSlug`):
+
+```json
+{
+  "triggerKind": "webhook",
+  "event": "push",          // from x-github-event or body.event
+  "headers": { ... sanitized allow-listed headers ... },
+  "body": { ... original POST body, parsed JSON ... }
+}
+```
+
+Security: webhook endpoints require the caller to prove ownership of the
+app. Built-in integrations with their own signature scheme (e.g. GitHub
+`x-hub-signature-256`) are verified by dedicated handlers in
+`src/routes/app-webhooks.js` before dispatch.
+
+Headers are filtered server-side to a small allow-list (`content-type`,
+`user-agent`, `x-github-event`, `x-github-delivery`, `x-hub-signature-256`).
+Arbitrary request headers are not forwarded, to avoid leaking secrets or
+host-specific tokens into the mini-app.
+
+#### Design notes
+
+- The `payload` object is forwarded verbatim from the router; never trust
+  it without validation. For webhook triggers especially, run a schema
+  check before acting.
+- Triggers fire even when the user is offline if the mini-app is a pm2
+  service — pm2 apps receive `app_trigger` over the bridge WS regardless of
+  the user's browser state. Frontend components only see triggers when the
+  chat WS is connected.
+- A mini-app can declare multiple triggers of the same kind with different
+  filters; each matching trigger fires independently.
+
+### Rate limits + quotas
+
+| Resource | Window | Cap (per user) |
+|---------|-------|---------------|
+| `/api/oauth/connections*` | 60s | 60 req |
+| `/api/tools/connections` + `/api/tools/connect/*` | 60s | 30 req |
+| `/api/data/*` | 60s | 120 req |
+| `send_message` (bridge) | 10s | 100 req |
+
+Exceeding returns HTTP 429 with `Retry-After` seconds. On bridge-local
+endpoints, 429 is advisory — clients should back off rather than retry
+in a tight loop.
+

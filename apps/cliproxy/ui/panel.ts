@@ -422,9 +422,39 @@ function render() {
             <p class="form-hint" style="color: var(--fg-warning, #f59e0b);">
               No refresh token stored for ${escapeHtml(label)}. Auto-refresh will be unavailable until you re-connect via the OAuth flow (manual token pastes do not include a refresh token).
             </p>
+            <button class="btn btn-primary" onclick="__reconnectCurrentProvider()" style="margin-top: 8px;">
+              Re-connect ${escapeHtml(label)}
+            </button>
           </div>
           `;
-        })() : ''}
+        })() : (() => {
+          // Pre-expiry nudge: if the token is valid now but within 5 minutes of
+          // expiry, surface a soft warning + reconnect CTA. Refresh usually
+          // kicks in automatically, but the nudge protects against refresh
+          // failures (e.g. provider invalidated the refresh token) that would
+          // otherwise manifest mid-conversation as an opaque auth error.
+          const expiredAt = state.tokenStatus?.expired;
+          if (!expiredAt) return '';
+          const expiresMs = new Date(expiredAt).getTime();
+          if (!Number.isFinite(expiresMs)) return '';
+          const msUntil = expiresMs - Date.now();
+          const FIVE_MIN_MS = 5 * 60 * 1000;
+          if (msUntil <= 0 || msUntil > FIVE_MIN_MS) return '';
+          const minutes = Math.max(1, Math.ceil(msUntil / 60_000));
+          const provider = tokenCardProvider || 'this provider';
+          const label = providerLabel(provider);
+          return `
+          <div class="form-card">
+            <p class="form-hint" style="color: var(--fg-warning, #f59e0b);">
+              Token for ${escapeHtml(label)} expires in ~${minutes} minute${minutes === 1 ? '' : 's'}.
+              If auto-refresh fails, re-connect here to avoid auth errors mid-session.
+            </p>
+            <button class="btn btn-secondary" onclick="__reconnectCurrentProvider()" style="margin-top: 8px;">
+              Re-connect ${escapeHtml(label)}
+            </button>
+          </div>
+          `;
+        })()}
 
         <!-- Manual token paste (collapsed fallback) -->
         <details class="form-card" ${manualTokenOpen ? 'open' : ''} ontoggle="__onTokenToggle()">
@@ -509,6 +539,13 @@ function render() {
   (window as any).__onKeyInput = onKeyInput;
   (window as any).__onTokenInput = onTokenInput;
   (window as any).__onTokenToggle = onTokenToggle;
+  // Pre-expiry / missing-refresh-token reconnect shortcut. Selects the current
+  // provider and kicks off the OAuth flow without the user having to re-choose.
+  (window as any).__reconnectCurrentProvider = () => {
+    if (!tokenCardProvider) return;
+    selectedProviderId = tokenCardProvider;
+    handleConnect();
+  };
 }
 
 function onProviderChange() {
