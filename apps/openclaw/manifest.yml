@@ -4,7 +4,7 @@ kind: app
 name: OpenClaw
 description: Core AI chat engine — handles all user messages and slash commands
 icon: "\U0001F9E0"
-version: 1.0.0
+version: 1.0.1
 
 service:
   order: 1

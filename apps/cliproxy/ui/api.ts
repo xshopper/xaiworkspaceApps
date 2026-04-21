@@ -118,3 +118,54 @@ export async function pollCliOAuth(state: string, started_at: string, provider: 
     return { status: 'wait', message: 'Polling — waiting for authentication...' };
   }
 }
+
+/**
+ * Parse a pasted OAuth redirect URL and submit the extracted `code`+`state`
+ * to the router backend, which forwards to the user's workspace CLIProxyAPI.
+ * Accepts either a full URL (`http://localhost:54545/callback?code=X&state=Y`)
+ * or bare `code#state` / `code` values.
+ */
+export async function submitOAuthPaste(
+  pasted: string,
+  expectedState: string | null,
+): Promise<{ ok: boolean; error?: string }> {
+  const trimmed = (pasted || '').trim();
+  if (!trimmed) return { ok: false, error: 'Paste the redirect URL or code' };
+
+  let code = '';
+  let state = '';
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const u = new URL(trimmed);
+      code = (u.searchParams.get('code') || '').split('#')[0].trim();
+      state = (u.searchParams.get('state') || '').trim();
+      const err = u.searchParams.get('error');
+      if (err) return { ok: false, error: u.searchParams.get('error_description') || err };
+    } catch {
+      return { ok: false, error: 'Invalid URL' };
+    }
+  } else if (trimmed.includes('=')) {
+    // Raw query string fragment e.g. "code=X&state=Y"
+    const qs = new URLSearchParams(trimmed.replace(/^\?/, ''));
+    code = (qs.get('code') || '').split('#')[0].trim();
+    state = (qs.get('state') || '').trim();
+  } else {
+    code = trimmed.split('#')[0].trim();
+  }
+
+  if (!state) state = (expectedState || '').trim();
+  if (!code) return { ok: false, error: 'Could not find code in paste' };
+  if (!state) return { ok: false, error: 'Could not find state in paste' };
+  if (expectedState && state !== expectedState) {
+    return { ok: false, error: 'State mismatch — paste may be from a different login attempt' };
+  }
+
+  try {
+    const result = await xai.cliproxy.submitCallback(state, code);
+    if (result?.ok) return { ok: true };
+    return { ok: false, error: result?.error ?? 'Callback submission failed' };
+  } catch (err: any) {
+    return { ok: false, error: err?.message ?? 'Callback submission failed' };
+  }
+}

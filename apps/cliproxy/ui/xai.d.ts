@@ -74,6 +74,7 @@ interface XaiTools {
 interface XaiCliproxy {
   startOAuth(provider: string): Promise<{ authorize_url: string; state: string; started_at: string }>;
   pollOAuth(state: string, startedAt: string, provider: string): Promise<{ status: string; message?: string }>;
+  submitCallback(state: string, code: string): Promise<{ ok: boolean; delivered?: boolean; error?: string }>;
 }
 
 interface XaiSDK {
