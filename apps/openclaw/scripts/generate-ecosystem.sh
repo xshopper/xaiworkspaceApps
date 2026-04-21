@@ -90,44 +90,27 @@ const apps = [
   },
 ];
 
-if (HAS_INOTIFY) {
-  apps.push({
-    name: "config-sync",
-    script: "/usr/local/bin/openclaw-config-sync.sh",
-    args: [CLIENT_USER, S3_BUCKET, CHAT_ID, EFS_REGION],
-    interpreter: "/bin/bash",
-    autorestart: true,
-    max_restarts: 5,
-    restart_delay: 10000,
-  });
-}
+// S3-sync helpers ship in the workspace-base Docker image under
+// /usr/local/bin/openclaw-*.sh. On images that do NOT include them (or
+// when S3_BUCKET is empty — local/dev workers), pm2 would ENOENT on fork
+// and pm2 startOrRestart would exit non-zero, making the whole install
+// fail. Guard each entry on existsSync so missing helpers skip silently.
+const helpers = [
+  { name: "config-sync",     script: "/usr/local/bin/openclaw-config-sync.sh",     args: [CLIENT_USER, S3_BUCKET, CHAT_ID, EFS_REGION], autorestart: true,  max_restarts: 5, restart_delay: 10000, when: HAS_INOTIFY && !!S3_BUCKET },
+  { name: "config-pull",     script: "/usr/local/bin/openclaw-config-pull.sh",     args: [CLIENT_USER, S3_BUCKET, CHAT_ID, EFS_REGION], autorestart: false, cron_restart: "* * * * *",   when: !!S3_BUCKET },
+  { name: "workspace-pull",  script: "/usr/local/bin/openclaw-workspace-pull.sh",  args: [CLIENT_USER, S3_BUCKET, EFS_REGION],          autorestart: false, cron_restart: "*/5 * * * *", when: !!S3_BUCKET },
+  { name: "health-watchdog", script: "/usr/local/bin/openclaw-health-watchdog.sh", args: [PORT, "3"],                                    autorestart: false, cron_restart: "* * * * *",   when: true },
+];
 
-apps.push(
-  {
-    name: "config-pull",
-    script: "/usr/local/bin/openclaw-config-pull.sh",
-    args: [CLIENT_USER, S3_BUCKET, CHAT_ID, EFS_REGION],
-    interpreter: "/bin/bash",
-    autorestart: false,
-    cron_restart: "* * * * *",
-  },
-  {
-    name: "workspace-pull",
-    script: "/usr/local/bin/openclaw-workspace-pull.sh",
-    args: [CLIENT_USER, S3_BUCKET, EFS_REGION],
-    interpreter: "/bin/bash",
-    autorestart: false,
-    cron_restart: "*/5 * * * *",
-  },
-  {
-    name: "health-watchdog",
-    script: "/usr/local/bin/openclaw-health-watchdog.sh",
-    args: [PORT, "3"],
-    interpreter: "/bin/bash",
-    autorestart: false,
-    cron_restart: "* * * * *",
-  },
-);
+for (const h of helpers) {
+  if (!h.when) continue;
+  if (!fs.existsSync(h.script)) {
+    console.error("Skipping pm2 entry " + h.name + " — " + h.script + " not installed on this image");
+    continue;
+  }
+  const { when, ...entry } = h;
+  apps.push({ ...entry, interpreter: "/bin/bash" });
+}
 
 // NOTE: mini-app supervision is owned by workspace-agent (bridge.js), which
 // pm2-spawns each installed app under its own slug ("cliproxy", "connect",
