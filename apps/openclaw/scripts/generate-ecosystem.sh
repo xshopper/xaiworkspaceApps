@@ -129,129 +129,18 @@ apps.push(
   },
 );
 
-// Scan other installed mini apps for startup entries.
+// NOTE: mini-app supervision is owned by workspace-agent (bridge.js), which
+// pm2-spawns each installed app under its own slug ("cliproxy", "connect",
+// etc.) as part of the install_app handler. Emitting a duplicate
+// "app-<slug>" entry here would put two pm2 processes on the same port
+// (e.g. cliproxy + app-cliproxy both binding 4001) — a crash-loop as
+// pm2 autorestart ping-pongs them on `EADDRINUSE`.
 //
-// SECURITY MODEL (tightened from the original character allowlist):
-//
-// The previous regex `^[\w ./\-~&=:\x27"]+$` accepted anything built from
-// alphanumerics, spaces, slashes, hyphens, quotes, and equals — which
-// happily let strings like `rm -rf /` pass validation. Since the startup
-// string is passed to `bash -c`, any argv we tolerate becomes unsandboxed
-// shell.
-//
-// New model: the startup value must either be a path under the apps
-// directory, OR it must begin with an allowlisted interpreter followed by
-// a space. After the prefix we still reject shell metacharacters that would
-// let the command branch into unrelated binaries (backtick, dollar-paren,
-// pipes, semicolons, redirection, comment markers).
-// `bash `/`sh ` are intentionally excluded — they would let
-// `bash evil.sh` pass the prefix allowlist. First-party apps use
-// node/pnpm/npm; path-resolution below still accepts direct shell
-// scripts that live under the apps directory (e.g. `./run.sh`).
-const ALLOWED_STARTUP_PREFIXES = [
-  "node ",
-  "python3 ",
-  "pnpm ",
-  "npm ",
-];
-// Characters that enable command chaining / substitution / redirection.
-// Even if the prefix is safe, an attacker could tack on `; evil` after a
-// legitimate `node index.js` to execute arbitrary code.
-const FORBIDDEN_STARTUP_CHARS = /[`$|;<>(){}]/;
-const appsDir = path.join(HOME, "apps");
-if (fs.existsSync(appsDir)) {
-  for (const entry of fs.readdirSync(appsDir)) {
-    const manifestPath = path.join(appsDir, entry, "manifest.yml");
-    if (!fs.existsSync(manifestPath)) continue;
-    const appDir = path.join(appsDir, entry);
-    if (appDir === APP_DIR) continue; // skip ourselves
-    // Skip workspace-agent — it is managed by the bootstrap ecosystem (/opt/bootstrap/)
-    // and its startup command (pm2 restart) would cause a self-kill loop
-    const dirName = path.basename(appDir);
-    if (dirName === "com.xshopper.workspace-agent" || dirName === "workspace-agent") continue;
-
-    let manifest;
-    try {
-      const raw = fs.readFileSync(manifestPath, "utf8");
-      manifest = yaml.load(raw);
-    } catch { continue; }
-
-    const slug = manifest.slug || entry;
-    const startup = manifest.startup;
-    if (!startup || startup === "null" || startup === "None") continue;
-
-    // Block control characters (newlines, tabs, carriage returns)
-    if (/[\x00-\x1f\x7f]/.test(startup)) {
-      console.error("WARNING: Skipping app-" + slug + " — startup contains control characters");
-      continue;
-    }
-    // Block standalone `&` (background operator) but allow the exact
-    // two-character `&&` (command chaining). First-party apps commonly use
-    // `cd ~/apps/... && node ...`. `FORBIDDEN_STARTUP_CHARS` still blocks
-    // `|`, `;`, backtick, `$`, `{}`, so `&&` cannot be combined with
-    // other metacharacters to branch into unrelated binaries.
-    //
-    // Two-stage check:
-    //   1. Reject `&&&+` — negative-lookbehind alone skips this because
-    //      every `&` in a run of 3+ has a neighbour on one side. We need
-    //      an explicit triple-or-more rejection.
-    //   2. Reject lone `&` (not part of a `&&` pair).
-    if (/&{3,}/.test(startup)) {
-      console.error("WARNING: Skipping app-" + slug + " — startup contains run of 3+ '&' (only exact && is permitted)");
-      continue;
-    }
-    if (/(?<!&)&(?!&)/.test(startup)) {
-      console.error("WARNING: Skipping app-" + slug + " — startup contains lone & (background operator)");
-      continue;
-    }
-    if (FORBIDDEN_STARTUP_CHARS.test(startup)) {
-      console.error("WARNING: Skipping app-" + slug + " — startup contains forbidden shell metacharacter: " + startup.slice(0, 100));
-      continue;
-    }
-    if (startup.length > 500) {
-      console.error("WARNING: Skipping app-" + slug + " — startup too long (" + startup.length + " chars)");
-      continue;
-    }
-
-    // Startup must either (a) begin with an allowlisted interpreter + space
-    // or (b) be a path inside the app directory (resolved with realpath
-    // equivalence; symlinks that point outside are rejected).
-    const hasAllowedPrefix = ALLOWED_STARTUP_PREFIXES.some((p) => startup.startsWith(p));
-    let startupOk = hasAllowedPrefix;
-    if (!startupOk) {
-      // Treat the first whitespace-separated token as the command path.
-      const firstTok = startup.split(/\s+/)[0] || "";
-      try {
-        const resolved = path.resolve(appDir, firstTok);
-        const realAppDir = fs.realpathSync(appDir);
-        // realpathSync may fail if the file does not exist — fall back to
-        // resolved path containment.
-        let realResolved = resolved;
-        try { realResolved = fs.realpathSync(resolved); } catch { /* ok */ }
-        const rootWithSep = realAppDir.endsWith(path.sep) ? realAppDir : realAppDir + path.sep;
-        startupOk = realResolved === realAppDir || realResolved.startsWith(rootWithSep);
-      } catch { startupOk = false; }
-    }
-    if (!startupOk) {
-      console.error("WARNING: Skipping app-" + slug + " — startup must begin with an allowed interpreter (" + ALLOWED_STARTUP_PREFIXES.map((p) => p.trim()).join(", ") + ") or resolve to a path under " + appDir + ". Got: " + startup.slice(0, 100));
-      continue;
-    }
-
-    apps.push({
-      name: "app-" + slug,
-      script: "/bin/bash",
-      args: ["-c", startup],
-      interpreter: "none",
-      cwd: appDir,
-      uid: CLIENT_UID,
-      gid: CLIENT_GID,
-      autorestart: true,
-      max_restarts: 5,
-      restart_delay: 5000,
-    });
-    console.error("Mini app registered: " + slug);
-  }
-}
+// The legacy scan-apps loop was removed in favour of single-supervisor
+// ownership by the bridge. If/when openclaw needs to manage a helper
+// process that the bridge does NOT install (rare), reintroduce a narrow
+// allowlist here — do NOT resurrect the generic enumerate-all-manifests
+// loop.
 
 // Write ecosystem config as valid JS module
 const output = "module.exports = " + JSON.stringify({ apps }, null, 2) + ";\n";
