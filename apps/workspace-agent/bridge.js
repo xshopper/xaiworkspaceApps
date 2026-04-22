@@ -1089,7 +1089,11 @@ async function handleInstallApp(msg) {
         }).catch(() => {});
       };
 
-      const ecoFile = path.join(appDir, 'ecosystem.config.js');
+      // Prefer .cjs (safe under apps with "type":"module") and fall back to
+      // .js for legacy installs. Writes always use .cjs from here on.
+      const ecoFileCjs = path.join(appDir, 'ecosystem.config.cjs');
+      const ecoFileJs = path.join(appDir, 'ecosystem.config.js');
+      const ecoFile = fs.existsSync(ecoFileCjs) ? ecoFileCjs : ecoFileJs;
       // Default instance first
       await restartWithFreshToken(slug, 'default', ecoFile);
       // Named instances (slug--*)
@@ -1109,8 +1113,11 @@ async function handleInstallApp(msg) {
       send({ type: 'install_result', id, slug, name: instName, status: 'ok' });
       console.log(`[workspace-agent] App upgraded: ${slug} (all instances restarted with rotated tokens)`);
     } else {
-      // Normal install — start pm2 process with instance env vars
-      const ecoFile = path.join(appDir, 'ecosystem.config.js');
+      // Normal install — start pm2 process with instance env vars.
+      // Prefer .cjs; fall back to shipped .js if the app bundled one.
+      const ecoFileCjs = path.join(appDir, 'ecosystem.config.cjs');
+      const ecoFileJsCandidate = path.join(appDir, 'ecosystem.config.js');
+      const ecoFile = fs.existsSync(ecoFileCjs) ? ecoFileCjs : ecoFileJsCandidate;
       if (instName === 'default' && fs.existsSync(ecoFile)) {
         // Default instance with existing ecosystem file — use as-is, but
         // merge the SDK v1 instanceEnv into the child process env so that
@@ -1143,7 +1150,13 @@ async function handleInstallApp(msg) {
           return;
         } else {
           const startupParts = startupCmd.split(/\s+/);
-          const instanceEcoFile = instName === 'default' ? ecoFile : path.join(appDir, `ecosystem.${instName}.config.js`);
+          // Always write generated ecosystem as .cjs so Node treats it as
+          // CommonJS even when the app's package.json has "type":"module"
+          // (connect mini-app does). Previously wrote .js → pm2 failed with
+          // "module is not defined in ES module scope" on ESM apps.
+          const instanceEcoFile = instName === 'default'
+            ? path.join(appDir, 'ecosystem.config.cjs')
+            : path.join(appDir, `ecosystem.${instName}.config.cjs`);
           const eco = 'module.exports = { apps: [{ name: ' + JSON.stringify(processName) + ', script: ' + JSON.stringify(startupParts[0]) + ', args: ' + JSON.stringify(startupParts.slice(1)) + ', cwd: ' + JSON.stringify(appDir) + ', autorestart: true, env: ' + JSON.stringify(instanceEnv) + ' }] };';
           fs.writeFileSync(instanceEcoFile, eco);
           await execFileAsync('pm2', ['start', instanceEcoFile, '--update-env'], { timeout: 30000 });
@@ -1359,9 +1372,12 @@ async function handleStartAppInstance(msg) {
   try {
     const appDir = path.join(APPS_DIR, `com.xshopper.${slug}`);
     const instName = name || 'default';
-    const ecoFile = instName === 'default'
-      ? path.join(appDir, 'ecosystem.config.js')
-      : path.join(appDir, `ecosystem.${instName}.config.js`);
+    // Prefer generated .cjs, fall back to legacy / shipped .js.
+    const cjsName = instName === 'default' ? 'ecosystem.config.cjs' : `ecosystem.${instName}.config.cjs`;
+    const jsName = instName === 'default' ? 'ecosystem.config.js' : `ecosystem.${instName}.config.js`;
+    const ecoFile = fs.existsSync(path.join(appDir, cjsName))
+      ? path.join(appDir, cjsName)
+      : path.join(appDir, jsName);
     if (fs.existsSync(ecoFile)) {
       await execFileAsync('pm2', ['start', ecoFile, '--update-env'], { timeout: 30000 });
       console.log(`[workspace-agent] pm2 start ${ecoFile} (fallback for ${processName})`);
