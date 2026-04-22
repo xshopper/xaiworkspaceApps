@@ -1068,6 +1068,29 @@ const postRes = await xai.http('http://localhost:4001/admin/token', {
 });
 ```
 
+### `xai.audio` — background audio playback
+
+Unified audio API. On web it wraps `HTMLAudioElement`; on native (Capacitor iOS/Android) it delegates to the `AudioPlayer` plugin for background playback + lock-screen transport controls.
+
+Requires `resources: [device.audio]` in the manifest.
+
+**Methods:**
+- `xai.audio.load(opts)` — `{ url, title, artist?, album?, artworkUrl?, durationSec?, bookId?, chapterIdx?, startPositionSec? }` → resolves with `{ durationSec }`
+- `xai.audio.play()`
+- `xai.audio.pause()`
+- `xai.audio.stop()`
+- `xai.audio.seekTo(positionSec)`
+- `xai.audio.seekRelative(deltaSec)`
+- `xai.audio.setRate(rate)`
+- `xai.audio.release()` — tear down and release resources
+- `xai.audio.state()` → current `{ status, positionSec, durationSec, bookId, chapterIdx, rate }`
+
+**Events** (via `xai.on`):
+- `audio:state` — transport state snapshot on every signal change
+- `audio:remoteCommand` — lock-screen / headset button events: `{ command: 'play'|'pause'|'next'|'previous'|'seek', positionSec? }`
+
+**Native caveat:** iOS AVPlayer and Android ExoPlayer cannot resolve `blob:` URLs. The Angular host-side AudioPlayerService automatically detects blob URLs on native and writes them to Capacitor Filesystem temp storage before handing a `file://` URL to the native player.
+
 ### UI Panel
 
 Apps can declare a `ui` field in their manifest to render a custom interface in a side panel alongside the chat. When present, the platform loads the app's sandbox iframe in the right panel instead of inline.

@@ -20,6 +20,13 @@
  *
  * Idempotency: each step detects existing artefacts and skips. A partial
  * install is safe to resume — file-size checks invalidate truncated downloads.
+ *
+ * Environment:
+ *   AUDIOBOOK_STRICT_VERIFY=true
+ *     If set, install fails hard when MODEL_SHA256 or VOICES_SHA256 is null.
+ *     Prod/test deploys MUST set this so an MITM on huggingface.co can't
+ *     swap the onnx blob for an RCE payload. Dev leaves it unset until the
+ *     hashes are pinned after first successful deploy.
  */
 
 import fs from 'node:fs/promises';
@@ -59,17 +66,12 @@ export function ttsPaths() {
   return { modelPath: MODEL_PATH, voicesPath: VOICES_PATH };
 }
 
-export async function ensureTtsReady(onProgress = () => {}) {
-  if (await isInstalled()) return ttsPaths();
-  // Coalesce concurrent generate calls so a single install runs.
-  if (runningPromise) return runningPromise;
-  runningPromise = doInstall(onProgress).finally(() => {
-    runningPromise = null;
-  });
-  return runningPromise;
-}
-
-async function isInstalled() {
+/**
+ * Bug 5: exposed so server.js can distinguish "not installed / installing /
+ * ready" and return 202 immediately instead of blocking /generate behind a
+ * 30s+ pip + 320 MB download (sandbox-proxy has a 15s timeout).
+ */
+export async function isInstalled() {
   try {
     await fs.access(MARKER);
     const [model, voices] = await Promise.all([fs.stat(MODEL_PATH), fs.stat(VOICES_PATH)]);
@@ -80,7 +82,33 @@ async function isInstalled() {
   }
 }
 
+export function isInstalling() {
+  return runningPromise != null;
+}
+
+export async function ensureTtsReady(onProgress = () => {}) {
+  if (await isInstalled()) return ttsPaths();
+  // Coalesce concurrent generate calls so a single install runs.
+  if (runningPromise) return runningPromise;
+  runningPromise = doInstall(onProgress).finally(() => {
+    runningPromise = null;
+  });
+  return runningPromise;
+}
+
 async function doInstall(onProgress) {
+  // Bug 2: STRICT_VERIFY guard. Without pinned SHA-256s the Kokoro download
+  // trusts huggingface.co + TLS alone; a compromised registry or MITM could
+  // swap the onnx blob for an RCE payload that python loads into the worker.
+  // Prod/test deploys set AUDIOBOOK_STRICT_VERIFY=true so this path is
+  // refused until the hashes are computed from a known-good first deploy.
+  if (process.env.AUDIOBOOK_STRICT_VERIFY === 'true' && (MODEL_SHA256 === null || VOICES_SHA256 === null)) {
+    throw new Error(
+      'AUDIOBOOK_STRICT_VERIFY=true but Kokoro SHA-256 pins are null. '
+      + 'Run a trusted install once, compute `sha256sum $APP_DATA_DIR/kokoro/*`, '
+      + 'and set MODEL_SHA256 / VOICES_SHA256 in lib/tts-install.js before deploying.',
+    );
+  }
   await fs.mkdir(KOKORO_DIR, { recursive: true });
 
   onProgress({ step: 'python', status: 'checking', message: 'Checking python3 availability…' });

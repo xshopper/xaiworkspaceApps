@@ -146,15 +146,30 @@ export async function readProgress() {
   }
 }
 
-export async function writeProgress(bookId, { chapterIdx, posSec }) {
+// Bug 6: serialise writes to progress.json. Concurrent POST /api/progress
+// calls (common when multiple tabs scrub the same book) previously raced on
+// read-modify-write: both read the same baseline, the last writeJsonAtomic
+// won, and the other tab's update was silently lost. A promise chain per
+// module is sufficient — progress writes are rare and cheap, so queueing them
+// costs almost nothing.
+let progressWriteChain = Promise.resolve();
+
+export function writeProgress(bookId, { chapterIdx, posSec }) {
   assertValidBookId(bookId);
-  const all = await readProgress();
-  all[bookId] = {
-    chapterIdx: chapterIdx || 0,
-    posSec: posSec || 0,
-    updatedAt: new Date().toISOString(),
-  };
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  await writeJsonAtomic(path.join(DATA_DIR, 'progress.json'), all);
-  return all[bookId];
+  const next = progressWriteChain.then(async () => {
+    const all = await readProgress();
+    all[bookId] = {
+      chapterIdx: chapterIdx || 0,
+      posSec: posSec || 0,
+      updatedAt: new Date().toISOString(),
+    };
+    await fs.mkdir(DATA_DIR, { recursive: true });
+    await writeJsonAtomic(path.join(DATA_DIR, 'progress.json'), all);
+    return all[bookId];
+  });
+  // Swallow errors on the chain itself so one failed write doesn't poison the
+  // mutex for every subsequent caller. The returned promise still rejects for
+  // the originating caller.
+  progressWriteChain = next.catch(() => {});
+  return next;
 }

@@ -107,6 +107,18 @@ port: 3210
 startup: "node server.js"
 cleanup: "pm2 delete audiobook 2>/dev/null || pkill -u \"$(id -u)\" -f 'audiobook/server.js' 2>/dev/null || true"
 
+# Bug 8: declare a GET /health probe so the bridge / pm2 watchdog can detect a
+# wedged server (e.g. Python TTS worker hung, event loop stalled) and restart
+# it. The server already implements GET /health → { ok: true, version }.
+# NOTE: SDK.md does not yet document this stanza (no `healthcheck` field found
+# in manifest schema as of 2026-04-22). This entry is forward-compatible —
+# bridge manifest loader will ignore unknown keys — and tracks as a follow-up
+# to wire into pm2's built-in health-check hook on the bridge side.
+healthcheck:
+  path: /health
+  intervalSec: 30
+  timeoutSec: 5
+
 model: claude-sonnet-4-6
 modelFallback: [claude-haiku-4-5-20251001]
 sandbox: strict

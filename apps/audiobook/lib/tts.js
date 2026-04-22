@@ -23,6 +23,12 @@ const WORKER_SCRIPT = new URL('../tts/tts_worker.py', import.meta.url).pathname;
 const PYTHON = process.env.AUDIOBOOK_PYTHON || 'python3';
 const FFMPEG = process.env.AUDIOBOOK_FFMPEG || 'ffmpeg';
 
+// Bug 3: cap the TTS FIFO to protect the server from a runaway caller queuing
+// thousands of chapters and exhausting memory / disk (each queued job holds a
+// full chapter of text in-memory). `enqueue()` throws at the cap; the server
+// handler translates the throw to HTTP 429 so the client can back off.
+const MAX_QUEUE = 500;
+
 /**
  * Paths to Kokoro assets. Injected by the lazy installer when it runs; until
  * then the worker falls back to the env-var defaults baked into tts_worker.py.
@@ -199,6 +205,14 @@ export class TtsManager extends EventEmitter {
 
   enqueue({ text, voice, speed, mp3Path }) {
     if (this.fatal) throw new Error(`TTS worker fatal: ${this.fatal}`);
+    // Bug 3: bound the queue so a caller can't DoS the worker by spamming
+    // thousands of chapters. 500 is well above any legitimate book (a long
+    // novel rarely exceeds 50 chapters) but low enough to bound memory.
+    if (this.queue.length >= MAX_QUEUE) {
+      const err = new Error('TTS queue full; try again later');
+      err.code = 'QUEUE_FULL';
+      throw err;
+    }
     // ensureStarted is idempotent; calling here means a crashed worker auto-
     // restarts on the next enqueue without any external orchestration.
     this.ensureStarted();
@@ -223,6 +237,11 @@ export class TtsManager extends EventEmitter {
 }
 
 function convertWavToMp3(wavPath, mp3Path) {
+  // Bug 1: write to <mp3Path>.part and rename on success. If ffmpeg is killed
+  // mid-write (SIGTERM, OOM, crash) the partial file never takes the final
+  // name, so `audioExists()` (size > 0 on final path) never falsely reports
+  // "generated" for a truncated mp3. Mirrors writeJsonAtomic pattern.
+  const partPath = `${mp3Path}.part`;
   return new Promise((resolve, reject) => {
     const ff = spawn(FFMPEG, [
       '-y',
@@ -230,10 +249,26 @@ function convertWavToMp3(wavPath, mp3Path) {
       '-i', wavPath,
       '-codec:a', 'libmp3lame',
       '-qscale:a', '5',
-      mp3Path,
+      partPath,
     ]);
-    ff.on('error', reject);
-    ff.on('exit', (code) => (code === 0 ? resolve(mp3Path) : reject(new Error(`ffmpeg exit ${code}`))));
+    ff.on('error', async (e) => {
+      await safeUnlink(partPath);
+      reject(e);
+    });
+    ff.on('exit', async (code) => {
+      if (code === 0) {
+        try {
+          await fs.rename(partPath, mp3Path);
+          resolve(mp3Path);
+        } catch (renameErr) {
+          await safeUnlink(partPath);
+          reject(renameErr);
+        }
+      } else {
+        await safeUnlink(partPath);
+        reject(new Error(`ffmpeg exit ${code}`));
+      }
+    });
   });
 }
 

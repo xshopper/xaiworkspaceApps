@@ -61,7 +61,7 @@ import {
 } from './lib/storage.js';
 import { tts, setKokoroPaths } from './lib/tts.js';
 import { jobs } from './lib/jobs.js';
-import { ensureTtsReady } from './lib/tts-install.js';
+import { ensureTtsReady, isInstalled, isInstalling, ttsPaths } from './lib/tts-install.js';
 import { listVoices, saveVoice, deleteVoice } from './lib/voices.js';
 
 const PORT = parseInt(process.env.APP_PORT ?? '3210', 10);
@@ -72,7 +72,14 @@ const APP_BRIDGE_TOKEN = process.env.APP_BRIDGE_TOKEN || '';
 // confusing 500s later at /share. If unset, share routes hard-fail with a
 // specific message.
 const ROUTER_URL = process.env.ROUTER_URL || '';
-const ROUTER_TOKEN = process.env.ANTHROPIC_API_KEY || '';
+// Bug 4: share endpoints auth via APP_CALLBACK_TOKEN (per-install token the
+// router injects as an env var at pm2 start; see SDK.md § Environment) sent
+// as `X-App-Callback-Token`. The previous `Bearer ${ANTHROPIC_API_KEY}` was
+// never going to match the user-JWT middleware on public-audiobooks.js and
+// always 401'd. Note: the router's audiobook share middleware now accepts
+// X-App-Callback-Token and validates with timingSafeEqual against
+// oc_app_installs.callback_token.
+const APP_CALLBACK_TOKEN = process.env.APP_CALLBACK_TOKEN || '';
 // Share IDs come back from the router; we validate them before interpolating
 // into the PUT URL so a compromised or misbehaving router can't coerce us into
 // fetching arbitrary paths.
@@ -161,8 +168,13 @@ function badRequest(res, msg) {
   send(res, 400, { error: msg });
 }
 
-function serverError(res, err) {
-  console.error('[audiobook]', err);
+function serverError(res, err, req) {
+  // Bug 9: include request path so CloudWatch Insights can group 500s by
+  // endpoint. req is optional for back-compat with callers that don't have it
+  // in scope.
+  const ctx = { message: err?.message, stack: err?.stack };
+  if (req) ctx.path = req.url;
+  console.error('[audiobook] serverError', ctx);
   send(res, 500, { error: err.message || 'internal error' });
 }
 
@@ -181,7 +193,7 @@ function checkContentLength(req, res, maxBytes) {
 
 // ── WS progress bridge ──────────────────────────────────────────────────
 
-async function postToChat(text, buttons) {
+async function postToChat(text, buttons, context = 'generic') {
   if (!BRIDGE_URL) return;
   try {
     await fetch(`${BRIDGE_URL}/api/messages`, {
@@ -193,13 +205,16 @@ async function postToChat(text, buttons) {
       body: JSON.stringify({ text, buttons, format: 'markdown' }),
     });
   } catch (e) {
-    console.error('[audiobook] chat post failed:', e.message);
+    // Bug 9: `context` tags the call site (e.g. 'tts-done', 'share',
+    // 'tts-install', 'tts-error') so log aggregation can tell which flow
+    // failed to notify the user.
+    console.error('[audiobook] chat post failed', { context, message: e.message });
   }
 }
 
 // ── Range file serving ──────────────────────────────────────────────────
 
-async function serveAudioRange(req, res, filePath) {
+async function serveAudioRange(req, res, filePath, ctx = {}) {
   let stat;
   try {
     stat = await fsp.stat(filePath);
@@ -221,7 +236,11 @@ async function serveAudioRange(req, res, filePath) {
     try {
       await pipeline(fs.createReadStream(filePath), res);
     } catch (e) {
-      console.error('[audiobook] audio stream failed:', e.message);
+      // Bug 9: include (bookId, idx) so log aggregation can correlate a
+      // stream failure to the chapter the user was playing. Client-aborted
+      // range requests are routine so this stays at console.error (not warn)
+      // only to keep the existing level.
+      console.error('[audiobook] audio stream failed', { ...ctx, message: e.message });
     }
     return;
   }
@@ -261,7 +280,12 @@ async function serveAudioRange(req, res, filePath) {
   try {
     await pipeline(fs.createReadStream(filePath, { start, end }), res);
   } catch (e) {
-    console.error('[audiobook] audio range stream failed:', e.message);
+    console.error('[audiobook] audio range stream failed', {
+      ...ctx,
+      start,
+      end,
+      message: e.message,
+    });
   }
 }
 
@@ -272,7 +296,12 @@ tts.on('progress', ({ jobId, percent, chunk, chunks }) => {
 });
 
 tts.on('done', async ({ jobId, mp3Path, durationSec }) => {
-  const job = jobs.update(jobId, { status: 'done', percent: 100, durationSec });
+  // Bug 7: previously we called jobs.update({ status: 'done' }) before
+  // awaiting updateChapterMeta. The SSE client sees "done" → fetches the
+  // chapter → meta.durationSec still null / audioPath missing because the
+  // meta write hadn't landed. Swap the order: meta-write first, then mark
+  // the job done so SSE only fires on fully-consistent state.
+  const job = jobs.get(jobId);
   if (!job) return;
   // Free the dedupe slot so a re-generate (e.g. user changed voice) can proceed.
   enqueuedSet.delete(enqueueKey(job.bookId, job.chapterIdx));
@@ -282,13 +311,25 @@ tts.on('done', async ({ jobId, mp3Path, durationSec }) => {
       audioPath: path.relative(bookDir(job.bookId), mp3Path),
     });
   } catch (e) {
-    console.error('[audiobook] chapter meta update failed:', e.message);
+    // Bug 7 + 9: book deleted / meta corrupted mid-generation — mark the job
+    // as error, not done, so the SSE client surfaces the failure instead of
+    // optimistically playing a chapter whose meta never got written.
+    console.error('[audiobook] chapter meta update failed', {
+      bookId: job.bookId,
+      chapterIdx: job.chapterIdx,
+      jobId,
+      message: e.message,
+    });
+    jobs.update(jobId, { status: 'error', error: `meta update failed: ${e.message}` });
+    return;
   }
+  jobs.update(jobId, { status: 'done', percent: 100, durationSec });
   await postToChat(
     `**Audiobook**\n\nChapter ${job.chapterIdx + 1} ready (${Math.round(durationSec)}s).`,
     [[
       { text: 'Play', callback_data: `@audiobook play ${job.bookId} ${job.chapterIdx}` },
     ]],
+    'tts-done',
   );
 });
 
@@ -297,7 +338,21 @@ tts.on('error', ({ jobId, message }) => {
   const job = jobs.get(jobId);
   if (job) {
     enqueuedSet.delete(enqueueKey(job.bookId, job.chapterIdx));
-    postToChat(`**Audiobook**\n\nChapter ${job.chapterIdx + 1} failed: ${message}`);
+    // Bug 9: structured log so CloudWatch Insights can correlate a TTS
+    // failure back to the (bookId, chapterIdx) that triggered it.
+    console.error('[audiobook] tts job error', {
+      bookId: job.bookId,
+      chapterIdx: job.chapterIdx,
+      jobId,
+      message,
+    });
+    postToChat(
+      `**Audiobook**\n\nChapter ${job.chapterIdx + 1} failed: ${message}`,
+      undefined,
+      'tts-error',
+    );
+  } else {
+    console.error('[audiobook] tts job error (no job record)', { jobId, message });
   }
 });
 
@@ -470,19 +525,41 @@ const routes = [
 
       if (!targets.length) return badRequest(res, 'no chapters to generate');
 
-      // Lazy install on first generate call. Subsequent calls no-op once the
-      // marker + assets are present. Failures surface as a 500 with the exact
-      // missing binary / step so the operator can act.
-      try {
-        const paths = await ensureTtsReady((progress) => {
-          postToChat(
-            `**Audiobook — TTS install**\n\n${progress.step}: ${progress.status}${progress.message ? `\n${progress.message}` : ''}${progress.percent != null ? `\n${progress.percent}%` : ''}`,
-          );
+      // Bug 5: don't block /generate on pip + 320 MB model download. The
+      // sandbox-proxy times out at 15s so awaiting ensureTtsReady would make
+      // the iframe render an error while install silently continues. Instead
+      // kick off the install as a fire-and-forget background task and return
+      // 202 { status: 'installing' } so the UI can poll /audio-status.
+      if (!(await isInstalled())) {
+        if (!isInstalling()) {
+          // Fire and forget: progress still goes to chat via postToChat.
+          // Swallow the promise rejection here — the next /generate call
+          // surfaces the error via isInstalled() staying false + progress
+          // messages on chat.
+          ensureTtsReady((progress) => {
+            postToChat(
+              `**Audiobook — TTS install**\n\n${progress.step}: ${progress.status}${progress.message ? `\n${progress.message}` : ''}${progress.percent != null ? `\n${progress.percent}%` : ''}`,
+              undefined,
+              'tts-install-progress',
+            );
+          }).catch((e) => {
+            console.error('[audiobook] TTS install failed', { message: e.message });
+            postToChat(
+              `**Audiobook — TTS install failed**\n\n${e.message}`,
+              undefined,
+              'tts-install-failed',
+            );
+          });
+        }
+        return send(res, 202, {
+          bookId: id,
+          status: 'installing',
+          message: 'TTS dependencies installing; retry in a minute.',
+          enqueued: [],
         });
-        setKokoroPaths(paths);
-      } catch (e) {
-        return serverError(res, e);
       }
+      // Install finished since we last set paths; harmless to call every time.
+      setKokoroPaths(ttsPaths());
 
       // Track the keys we reserve so we can roll them back if the enqueue
       // loop throws halfway through; otherwise a failed mkdir mid-batch would
@@ -526,6 +603,11 @@ const routes = [
         // to the queue, so we only remove reservations that haven't already
         // been consumed by a successful enqueue.
         for (const key of reserved) enqueuedSet.delete(key);
+        // Bug 3: translate TTS queue-full into 429 so the client knows to
+        // back off instead of seeing a generic 500.
+        if (e.code === 'QUEUE_FULL') {
+          return send(res, 429, { error: e.message, bookId: id });
+        }
         return serverError(res, e);
       }
       send(res, 202, { bookId: id, enqueued });
@@ -538,7 +620,7 @@ const routes = [
       const id = decodeURIComponent(bookId);
       if (!validBookId(id)) return badRequest(res, 'invalid bookId');
       const idx = parseInt(idxStr, 10);
-      await serveAudioRange(req, res, audioPath(id, idx));
+      await serveAudioRange(req, res, audioPath(id, idx), { bookId: id, idx });
     },
   },
   // ── base64 wrapper endpoints (Bug 15) ──────────────────────────────────
@@ -653,7 +735,7 @@ const routes = [
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${ROUTER_TOKEN}`,
+          'X-App-Callback-Token': APP_CALLBACK_TOKEN,
         },
         body: JSON.stringify({
           bookTitle: meta.title,
@@ -687,7 +769,7 @@ const routes = [
           method: 'PUT',
           headers: {
             'Content-Type': 'audio/mpeg',
-            Authorization: `Bearer ${ROUTER_TOKEN}`,
+            'X-App-Callback-Token': APP_CALLBACK_TOKEN,
             'Content-Length': String(body.length),
           },
           body,
@@ -702,6 +784,7 @@ const routes = [
       await postToChat(
         `**Audiobook shared**\n\n**${meta.title}**\n${share.url}\n\nAnyone with the link can listen.`,
         [[{ text: 'Copy link', callback_data: `@audiobook share ${id}` }]],
+        'share-success',
       );
       send(res, 201, share);
     },
@@ -729,7 +812,7 @@ const routes = [
       }
       const resp = await fetch(`${ROUTER_URL}/api/audiobooks/share/${meta.share.id}`, {
         method: 'DELETE',
-        headers: { Authorization: `Bearer ${ROUTER_TOKEN}` },
+        headers: { 'X-App-Callback-Token': APP_CALLBACK_TOKEN },
       });
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ error: `unshare failed: ${resp.status}` }));
@@ -849,7 +932,7 @@ const server = http.createServer(async (req, res) => {
     }
     notFound(res);
   } catch (err) {
-    serverError(res, err);
+    serverError(res, err, req);
   }
 });
 
