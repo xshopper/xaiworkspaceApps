@@ -1,0 +1,131 @@
+slug: audiobook
+identifier: com.xaiworkspace.audiobook
+kind: app
+name: Audiobook
+description: Search public-domain books, extract chapters, and (soon) generate AI-narrated audiobooks on-device. Build a personal listening library.
+icon: "\U0001F3A7"
+version: 0.2.0
+
+persona:
+  soul: |
+    You are a helpful librarian. You help users discover public-domain books,
+    import them into a personal library, and prepare them for narration.
+  rules: |
+    - Prefer Project Gutenberg / Standard Ebooks / Librivox for search
+    - Warn users about copyright when importing arbitrary URLs
+    - Never clone voices of real people without explicit consent upload
+    - Scripts live at: ~/apps/com.xaiworkspace.audiobook/scripts/
+
+    @audiobook or @audiobook status:
+      Run: bash ~/apps/com.xaiworkspace.audiobook/scripts/status.sh
+
+    @audiobook search <query>:
+      Search Project Gutenberg for public-domain books.
+      Run: bash ~/apps/com.xaiworkspace.audiobook/scripts/search.sh <query>
+
+    @audiobook import <url|gutenberg-id>:
+      Import an EPUB/PDF and extract chapters.
+      Run: bash ~/apps/com.xaiworkspace.audiobook/scripts/import.sh <url|id>
+
+    @audiobook list:
+      Show books in the user's library.
+      Run: bash ~/apps/com.xaiworkspace.audiobook/scripts/list.sh
+
+    @audiobook chapters <bookId>:
+      List chapters for a book.
+      Run: bash ~/apps/com.xaiworkspace.audiobook/scripts/chapters.sh <bookId>
+
+    @audiobook generate <bookId> [voice] [speed]:
+      Generate audio for every chapter of a book (skip already-generated).
+      Run: bash ~/apps/com.xaiworkspace.audiobook/scripts/generate.sh <bookId> [voice] [speed]
+
+    @audiobook play <bookId> [chapterIdx]:
+      Play a chapter (defaults to chapter 0).
+      Run: bash ~/apps/com.xaiworkspace.audiobook/scripts/play.sh <bookId> [chapterIdx]
+
+    @audiobook voices:
+      List recorded voice samples.
+      Run: bash ~/apps/com.xaiworkspace.audiobook/scripts/voices.sh
+
+    Voice recording consent:
+      - Always require explicit consent checkbox before storing voice samples.
+      - Voice biometric data is sensitive; never share across users without
+        an explicit publish action (Phase 7).
+      - Sample must be the user's own voice; never clone third parties.
+  knowledge: |
+    Audiobook stores books as (metadata, raw text, chapter map) under APP_DATA_DIR.
+    Chapter detection order: EPUB TOC → PDF outline → regex ^CHAPTER → 5k-char chunks.
+    TTS generation (Phase 2+) uses on-device Kokoro or Chatterbox; not yet wired.
+
+permissions:
+  resources: [storage, database, device.audio, device.microphone]
+  network: [localhost:3210]
+  chat: [chat.send, chat.read]
+
+approvalRequired:
+  - voice.record
+  - voice.delete
+
+commands:
+  status: "bash scripts/status.sh"
+  search: "bash scripts/search.sh {args}"
+  import: "bash scripts/import.sh {args}"
+  list: "bash scripts/list.sh"
+  chapters: "bash scripts/chapters.sh {args}"
+  generate: "bash scripts/generate.sh {args}"
+  play: "bash scripts/play.sh {args}"
+  voices: "bash scripts/voices.sh"
+
+parameters:
+  - name: defaultVoice
+    label: Default voice (reserved for Phase 2)
+    type: select
+    enum: [af_sky, af_bella, am_adam, bm_george, bf_emma]
+    default: af_sky
+  - name: defaultSpeed
+    label: Default playback speed
+    type: number
+    default: 1.0
+    min: 0.5
+    max: 3.0
+
+ui:
+  type: panel
+  title: Audiobook
+
+service:
+  order: 70
+  navItems:
+    - id: library
+      label: Library
+      icon: book
+    - id: discover
+      label: Discover
+      icon: search
+
+port: 3210
+startup: "node server.js"
+cleanup: "pm2 delete audiobook 2>/dev/null || pkill -u \"$(id -u)\" -f 'audiobook/server.js' 2>/dev/null || true"
+
+model: claude-sonnet-4-6
+modelFallback: [claude-haiku-4-5-20251001]
+sandbox: strict
+categories: [media, productivity]
+
+help: |
+  # Audiobook
+
+  Build a personal audiobook library. Search, import, narrate, listen.
+
+  **Commands**:
+  - `@audiobook search <query>` — search Project Gutenberg
+  - `@audiobook import <url|id>` — import EPUB/PDF
+  - `@audiobook list` — library contents
+  - `@audiobook chapters <bookId>` — list chapters for a book
+  - `@audiobook generate <bookId> [voice] [speed]` — synthesise narration
+  - `@audiobook play <bookId> [chapterIdx]` — stream chapter audio
+
+  **Requirements** (lazy-installed on first generate):
+  - `python3` + `kokoro-onnx` (see `tts/README.md`)
+  - `ffmpeg` for wav→mp3 conversion
+  - Kokoro model assets at `$KOKORO_MODEL` / `$KOKORO_VOICES`
