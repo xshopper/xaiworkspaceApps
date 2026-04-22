@@ -741,7 +741,10 @@ const CSS = `
   }
 
   .panel {
-    max-width: 700px;
+    /* Fill sandbox iframe width — the service-host area is already width-
+       constrained by the shell. Capping to 700px inside a wide iframe
+       leaves huge gutters and makes the content look tiny. */
+    max-width: none;
     width: 100%;
     margin: 0 auto;
     padding: 32px 24px;

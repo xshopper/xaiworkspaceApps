@@ -228,6 +228,7 @@ function connectRouter() {
       case 'uninstall_app_instance': handleUninstallAppInstance(msg); return;
       case 'stop_app_instance':  handleStopAppInstance(msg); return;
       case 'start_app_instance': handleStartAppInstance(msg); return;
+      case 'restart_app_instance': handleRestartAppInstance(msg); return;
       case 'restart_app':   handleRestartApp(msg); return;
       case 'list_apps':     handleListApps(msg); return;
       case 'exec':          handleExec(msg); return;
@@ -1392,25 +1393,66 @@ async function handleStartAppInstance(msg) {
   }
 }
 
-// ── restart_app ─────────────────────────────────────────────────────────────
+// ── restart_app (legacy, slug-only) ─────────────────────────────────────────
+// Targets a single pm2 process by derived name. Honours `msg.name` so named
+// instances don't accidentally restart the `default` process.
 
 function handleRestartApp(msg) {
-  const { id, slug } = msg;
+  const { id, slug, name } = msg;
 
   if (!slug || !SAFE_SLUG.test(slug)) {
     send({ type: 'restart_result', id, slug, status: 'error', error: 'Invalid slug' });
     return;
   }
+  if (name && name !== 'default' && !/^[a-z0-9][a-z0-9-]*$/.test(name)) {
+    send({ type: 'restart_result', id, slug, name, status: 'error', error: 'Invalid instance name' });
+    return;
+  }
+  const procName = (!name || name === 'default') ? slug : `${slug}--${name}`;
+  const legacyProcName = (!name || name === 'default') ? `app-${slug}` : `app-${slug}--${name}`;
 
   try {
     try {
-      execFileSync('pm2', ['restart', slug], { timeout: 10000 });
+      execFileSync('pm2', ['restart', procName], { timeout: 10000 });
     } catch {
-      execFileSync('pm2', ['restart', `app-${slug}`], { timeout: 10000 });
+      execFileSync('pm2', ['restart', legacyProcName], { timeout: 10000 });
     }
-    send({ type: 'restart_result', id, slug, status: 'ok' });
+    send({ type: 'restart_result', id, slug, name: name || 'default', status: 'ok' });
   } catch (err) {
-    send({ type: 'restart_result', id, slug, status: 'error', error: err.message });
+    send({ type: 'restart_result', id, slug, name: name || 'default', status: 'error', error: err.message });
+  }
+}
+
+// ── restart_app_instance ────────────────────────────────────────────────────
+// Router-initiated atomic pm2 restart. Used by POST /api/mini-apps/:slug/restart.
+// Mirrors handleStopAppInstance / handleStartAppInstance naming conventions.
+
+async function handleRestartAppInstance(msg) {
+  const { slug, name } = msg;
+  if (!slug || !SAFE_SLUG.test(slug)) {
+    send({ type: 'restart_app_instance_result', slug, name, status: 'error', error: 'Invalid slug' });
+    return;
+  }
+  if (name && name !== 'default' && !/^[a-z0-9][a-z0-9-]*$/.test(name)) {
+    send({ type: 'restart_app_instance_result', slug, name, status: 'error', error: 'Invalid instance name' });
+    return;
+  }
+  const processName = typeof msg.processName === 'string' && msg.processName
+    ? msg.processName
+    : ((!name || name === 'default') ? slug : `${slug}--${name}`);
+  if (!SAFE_PROCESS_NAME.test(processName)) {
+    send({ type: 'restart_app_instance_result', slug, name, status: 'error', error: 'Invalid processName' });
+    return;
+  }
+
+  try {
+    await execFileAsync('pm2', ['restart', processName], { timeout: 15000 });
+    console.log(`[workspace-agent] pm2 restart ${processName}`);
+    send({ type: 'restart_app_instance_result', slug, name: name || 'default', status: 'ok' });
+  } catch (err) {
+    const errMsg = err?.stderr?.toString?.() || err?.message || 'pm2 restart failed';
+    console.error(`[workspace-agent] pm2 restart ${processName} failed:`, errMsg);
+    send({ type: 'restart_app_instance_result', slug, name: name || 'default', status: 'error', error: errMsg.slice(0, 500) });
   }
 }
 
