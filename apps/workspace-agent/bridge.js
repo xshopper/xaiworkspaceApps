@@ -876,7 +876,10 @@ async function handleInstallApp(msg) {
         }
       }
 
-      await execFileAsync('cp', ['-a', src + '/.', appDir + '/'], { timeout: 15000 });
+      // `cp -a` preserves ownership — EFS access points (ECS workers) squash
+      // writes to a fixed UID and reject ownership preservation with EPERM.
+      // Use `-r --preserve=mode,timestamps` and let the kernel squash owner.
+      await execFileAsync('cp', ['-r', '--preserve=mode,timestamps', src + '/.', appDir + '/'], { timeout: 15000 });
       await execFileAsync('rm', ['-rf', tmpFile, tmpDir], { timeout: 5000 }).catch(() => {});
     } else if (sourceUrl) {
       // NOTE on integrity: unlike artifactUrl installs (which require a
@@ -918,7 +921,7 @@ async function handleInstallApp(msg) {
         // which is a correctness + supply-chain bug.
         await execFileAsync('git', ['clone', '--depth', '1', '--filter=blob:none', '--sparse', '--branch', branchOrRef, repoUrl, tmpSparse], { timeout: 120000 });
         await execFileAsync('git', ['-C', tmpSparse, 'sparse-checkout', 'set', ghSubdir], { timeout: 30000 });
-        await execFileAsync('cp', ['-a', path.join(tmpSparse, ghSubdir) + '/.', appDir + '/'], { timeout: 15000 });
+        await execFileAsync('cp', ['-r', '--preserve=mode,timestamps', path.join(tmpSparse, ghSubdir) + '/.', appDir + '/'], { timeout: 15000 });
         await execFileAsync('rm', ['-rf', tmpSparse], { timeout: 5000 }).catch(() => {});
       } else {
         // Whole-repo clone fallback. Pin to the optional `?ref=<branch|sha>`
