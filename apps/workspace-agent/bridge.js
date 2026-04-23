@@ -34,29 +34,17 @@
 // reports stale version → router sends install_app (self-update) →
 // agent restarts → still reports stale version.
 const AGENT_VERSION = (() => {
-  const fs = require('fs');
-  const p = require('path');
-  // 1. Prefer the install.sh-written env file — set by the platform at install
-  //    time, independent of where manifest.yml lands on disk.
+  // Read from package.json because the baseline self-update path
+  // (workspace-base/bridge.js::handleSelfUpdate) only copies a fixed set of
+  // files — bridge.js, entrypoint.sh, ecosystem.config.js, package.json —
+  // onto /opt/bootstrap. manifest.yml never lands, so a lookup that depends
+  // on it silently drops to '0.0.0' and triggers a bootstrap loop.
   try {
-    const txt = fs.readFileSync('/opt/bootstrap/agent-version.env', 'utf8');
-    const m = txt.match(/^AGENT_VERSION=([^\s]+)/m);
-    if (m) { console.log(`[workspace-agent] AGENT_VERSION ${m[1]} (env file)`); return m[1]; }
-  } catch {}
-  // 2. Fall back to manifest.yml in a few known locations.
-  const candidates = [
-    p.join(__dirname, 'manifest.yml'),
-    '/opt/bootstrap/manifest.yml',
-    '/opt/openclaw/apps/com.xshopper.workspace-agent/manifest.yml',
-  ];
-  for (const path of candidates) {
-    try {
-      const m = fs.readFileSync(path, 'utf8').match(/^version:\s*['"]?([^\s'"]+)/m);
-      if (m) { console.log(`[workspace-agent] AGENT_VERSION ${m[1]} (${path})`); return m[1]; }
-    } catch {}
+    return require('./package.json').version;
+  } catch (err) {
+    console.error(`[workspace-agent] AGENT_VERSION read FAILED: ${err.message}. __dirname=${__dirname}`);
+    return '0.0.0';
   }
-  console.error(`[workspace-agent] AGENT_VERSION read FAILED — tried env file + ${candidates.join(', ')}. __dirname=${__dirname}`);
-  return '0.0.0';
 })();
 
 const http = require('http');
