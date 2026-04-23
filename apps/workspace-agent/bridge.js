@@ -29,7 +29,18 @@
 // ─────────────────────────────────────────────────────────────────────────────
 'use strict';
 
-const AGENT_VERSION = '1.1.0';
+// Read from manifest.yml so there is one source of truth. A hardcoded
+// const drifts silently and triggers an endless bootstrap loop: agent
+// reports stale version → router sends install_app (self-update) →
+// agent restarts → still reports stale version.
+const AGENT_VERSION = (() => {
+  try {
+    const yaml = require('fs').readFileSync(require('path').join(__dirname, 'manifest.yml'), 'utf8');
+    const m = yaml.match(/^version:\s*['"]?([^\s'"]+)/m);
+    if (m) return m[1];
+  } catch {}
+  return '0.0.0';
+})();
 
 const http = require('http');
 const { execFileSync } = require('child_process');
