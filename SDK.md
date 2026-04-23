@@ -2285,7 +2285,7 @@ host-specific tokens into the mini-app.
 | Resource | Window | Cap (per user) |
 |---------|-------|---------------|
 | `/api/oauth/connections*` | 60s | 60 req |
-| `/api/tools/connections` + `/api/tools/connect/*` | 60s | 30 req |
+| `/api/connectors/connections` + `/api/connectors/connect/*` | 60s | 30 req |
 | `/api/data/*` | 60s | 120 req |
 | `send_message` (bridge) | 10s | 100 req |
 
