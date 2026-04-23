@@ -36,11 +36,14 @@
 const AGENT_VERSION = (() => {
   const fs = require('fs');
   const p = require('path');
-  // Check several locations — pm2 restarts bridge.js from /opt/bootstrap but
-  // install.sh might copy manifest.yml to a different path on some images,
-  // and `__dirname` can resolve through symlinks. Picking the first that
-  // parses avoids a silent drop to '0.0.0' which then triggers a bootstrap
-  // loop because the reported version never matches the router's target.
+  // 1. Prefer the install.sh-written env file — set by the platform at install
+  //    time, independent of where manifest.yml lands on disk.
+  try {
+    const txt = fs.readFileSync('/opt/bootstrap/agent-version.env', 'utf8');
+    const m = txt.match(/^AGENT_VERSION=([^\s]+)/m);
+    if (m) { console.log(`[workspace-agent] AGENT_VERSION ${m[1]} (env file)`); return m[1]; }
+  } catch {}
+  // 2. Fall back to manifest.yml in a few known locations.
   const candidates = [
     p.join(__dirname, 'manifest.yml'),
     '/opt/bootstrap/manifest.yml',
@@ -49,13 +52,10 @@ const AGENT_VERSION = (() => {
   for (const path of candidates) {
     try {
       const m = fs.readFileSync(path, 'utf8').match(/^version:\s*['"]?([^\s'"]+)/m);
-      if (m) {
-        console.log(`[workspace-agent] AGENT_VERSION ${m[1]} from ${path}`);
-        return m[1];
-      }
+      if (m) { console.log(`[workspace-agent] AGENT_VERSION ${m[1]} (${path})`); return m[1]; }
     } catch {}
   }
-  console.error(`[workspace-agent] AGENT_VERSION read FAILED — tried: ${candidates.join(', ')}. __dirname=${__dirname}`);
+  console.error(`[workspace-agent] AGENT_VERSION read FAILED — tried env file + ${candidates.join(', ')}. __dirname=${__dirname}`);
   return '0.0.0';
 })();
 
