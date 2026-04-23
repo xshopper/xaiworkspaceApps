@@ -1134,10 +1134,19 @@ async function handleInstallApp(msg) {
       console.log(`[workspace-agent] App upgraded: ${slug} (all instances restarted with rotated tokens)`);
     } else {
       // Normal install — start pm2 process with instance env vars.
-      // Prefer .cjs; fall back to shipped .js if the app bundled one.
+      // Prefer .cjs; fall back to shipped .js if the app bundled one, but
+      // never trust a stale .js left on EFS from a pre-`.cjs`-fix install
+      // if the manifest provides a startup command we can regenerate from.
       const ecoFileCjs = path.join(appDir, 'ecosystem.config.cjs');
       const ecoFileJsCandidate = path.join(appDir, 'ecosystem.config.js');
-      const ecoFile = fs.existsSync(ecoFileCjs) ? ecoFileCjs : ecoFileJsCandidate;
+      const cjsExists = fs.existsSync(ecoFileCjs);
+      const jsExists = fs.existsSync(ecoFileJsCandidate);
+      // If the only candidate is a legacy .js AND the manifest can regenerate,
+      // delete the .js so the regenerator below writes a clean .cjs.
+      if (!cjsExists && jsExists && manifest?.startup) {
+        try { fs.unlinkSync(ecoFileJsCandidate); } catch {}
+      }
+      const ecoFile = cjsExists ? ecoFileCjs : ecoFileJsCandidate;
       if (instName === 'default' && fs.existsSync(ecoFile)) {
         // Default instance with existing ecosystem file — use as-is, but
         // merge the SDK v1 instanceEnv into the child process env so that
