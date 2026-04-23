@@ -34,11 +34,28 @@
 // reports stale version → router sends install_app (self-update) →
 // agent restarts → still reports stale version.
 const AGENT_VERSION = (() => {
-  try {
-    const yaml = require('fs').readFileSync(require('path').join(__dirname, 'manifest.yml'), 'utf8');
-    const m = yaml.match(/^version:\s*['"]?([^\s'"]+)/m);
-    if (m) return m[1];
-  } catch {}
+  const fs = require('fs');
+  const p = require('path');
+  // Check several locations — pm2 restarts bridge.js from /opt/bootstrap but
+  // install.sh might copy manifest.yml to a different path on some images,
+  // and `__dirname` can resolve through symlinks. Picking the first that
+  // parses avoids a silent drop to '0.0.0' which then triggers a bootstrap
+  // loop because the reported version never matches the router's target.
+  const candidates = [
+    p.join(__dirname, 'manifest.yml'),
+    '/opt/bootstrap/manifest.yml',
+    '/opt/openclaw/apps/com.xshopper.workspace-agent/manifest.yml',
+  ];
+  for (const path of candidates) {
+    try {
+      const m = fs.readFileSync(path, 'utf8').match(/^version:\s*['"]?([^\s'"]+)/m);
+      if (m) {
+        console.log(`[workspace-agent] AGENT_VERSION ${m[1]} from ${path}`);
+        return m[1];
+      }
+    } catch {}
+  }
+  console.error(`[workspace-agent] AGENT_VERSION read FAILED — tried: ${candidates.join(', ')}. __dirname=${__dirname}`);
   return '0.0.0';
 })();
 
